@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
+from app.api.deps import require_api_key
 from app.api.routes import auth, health, messages, sync
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
@@ -41,10 +42,17 @@ def create_app() -> FastAPI:
         docs_url="/docs" if not settings.is_production else None,
         redoc_url=None,
     )
+    # /health stays open so a load balancer can probe it.  Everything that
+    # reads mail or controls a mailbox requires an API key; the OAuth callback
+    # is the one exception and is guarded by its state token instead.
     app.include_router(health.router)
     app.include_router(auth.router, prefix=API_PREFIX)
-    app.include_router(sync.router, prefix=API_PREFIX)
-    app.include_router(messages.router, prefix=API_PREFIX)
+    app.include_router(
+        sync.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)]
+    )
+    app.include_router(
+        messages.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)]
+    )
     return app
 
 

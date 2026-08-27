@@ -29,8 +29,11 @@ reliably, and prove it.
 
 *Prerequisite: the hosting decision (Cloud SQL vs Supabase).*
 
+- [x] **API-key authentication**, hashed at rest, revocable, audited; forced on
+      outside development
+- [x] **OAuth callback state verification** — one-time token, 15-minute life
+- [x] Orphaned-contact reclamation; unreferenced blobs reported for review
 - [ ] Deploy to Cloud Run; Cloud SQL or Supabase; GCS attachments; Secret Manager
-- [ ] **Authentication on the read API** — required before real client mail
 - [ ] Cloud Scheduler → `/api/v1/jobs/sync-all`
 - [ ] Gmail push via Pub/Sub, with the scheduled pull kept as the safety net
 - [ ] `company`, `client`, `matter`, `matter_link` with confidence scores

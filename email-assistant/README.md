@@ -25,6 +25,8 @@ read-only.
 | Attachments | Metadata always; bytes stored once per distinct file (SHA-256) |
 | Search | Structured filters + PostgreSQL full-text that ignores Slovak diacritics |
 | Audit | Every sync run recorded with counts, errors and outcome |
+| Access control | Hashed, revocable API keys; forced on outside development |
+| OAuth safety | One-time state token verified on callback |
 
 ## Quick start
 
@@ -34,7 +36,7 @@ make dev-db           # local PostgreSQL databases + extensions
 cp .env.example .env
 python -m app.core.crypto keygen     # paste into TOKEN_ENCRYPTION_KEY
 make migrate
-make test             # 135 tests
+make test             # 182 tests
 make seed             # load demo mail through the real pipeline
 make run              # API on http://localhost:8000  (docs at /docs)
 ```
@@ -51,6 +53,10 @@ python -m app.cli accounts                  # connected mailboxes
 python -m app.cli sync you@example.com --mode initial
 python -m app.cli search "kasačná sťažnosť"
 python -m app.cli stats
+
+python -m app.cli api-key create mcp-server   # shown once, stored hashed
+python -m app.cli api-key list
+python -m app.cli prune-contacts              # reclaim orphaned personal data
 ```
 
 ## Documentation

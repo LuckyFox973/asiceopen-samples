@@ -106,6 +106,17 @@ a human-readable summary, JSONB details, result, whether it was automatic, and
 a correlation id. Every sync run writes one. From phase 4, so does every Gmail
 action and every approval.
 
+### `api_key` — a revocable credential per consumer
+
+Name, `prefix` (stored in clear so a key can be identified and revoked without
+knowing it), `key_hash` (SHA-256 — the key itself is shown once, at creation),
+`last_used_at`, `expires_at`, `revoked_at`.
+
+### `oauth_state` — one-time tokens for the authorisation flow
+
+`state`, `expires_at`, `consumed_at`. Issued when a flow starts, verified and
+burnt on callback, so a third party cannot bind their own mailbox.
+
 ## Planned
 
 ### Phase 2 — matters and clients
@@ -156,3 +167,6 @@ flagged `needs_review` and surfaced for confirmation rather than silently made.
   removes its mail. `attachment.blob_id` is `RESTRICT`: shared bytes are never
   orphaned by deleting one message — blob reclamation is a deliberate,
   audited GDPR operation.
+- `contact` is **not** scoped to a mailbox: the same person may write to
+  several of yours. The cost is that contacts outlive the mailbox that
+  introduced them, which `prune_orphan_contacts` reclaims.

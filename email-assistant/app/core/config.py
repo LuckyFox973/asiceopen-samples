@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # --- Internal job auth -------------------------------------------------
     job_auth_token: str = ""
 
+    # --- API authentication ------------------------------------------------
+    # Unset means "off in development, on everywhere else"; see
+    # require_api_auth below.  It cannot be switched off in production.
+    api_auth_enabled: bool | None = None
+
     @field_validator("log_level")
     @classmethod
     def _upper(cls, v: str) -> str:
@@ -77,6 +82,17 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def require_api_auth(self) -> bool:
+        """Whether callers must present an API key.
+
+        Production always requires one: a deployment must not be able to
+        expose a mailbox by forgetting a setting.
+        """
+        if self.app_env != "development":
+            return True
+        return bool(self.api_auth_enabled)
 
     @property
     def gmail_scopes(self) -> list[str]:

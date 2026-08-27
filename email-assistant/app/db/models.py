@@ -25,6 +25,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -512,3 +513,52 @@ class AuditLog(Base):
     )
     automatic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     correlation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+
+
+# ---------------------------------------------------------------------------
+# Access control
+# ---------------------------------------------------------------------------
+
+
+class ApiKey(Base, TimestampMixin):
+    """A revocable credential for one consumer of the API.
+
+    Only the hash is stored; the key itself is shown once, at creation.
+    """
+
+    __tablename__ = "api_key"
+    __table_args__ = (Index("ix_api_key_prefix", "prefix"),)
+
+    id: Mapped[uuid.UUID] = _pk()
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+
+    def is_usable(self, now: datetime) -> bool:
+        if self.revoked_at is not None:
+            return False
+        return self.expires_at is None or self.expires_at > now
+
+
+class OAuthState(Base):
+    """A one-time state token issued when an authorisation flow starts.
+
+    Verified on callback so a third party cannot drive the flow and bind their
+    own mailbox to this installation.  Consumed on first use.
+    """
+
+    __tablename__ = "oauth_state"
+    __table_args__ = (Index("ix_oauth_state_expires_at", "expires_at"),)
+
+    id: Mapped[uuid.UUID] = _pk()
+    state: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

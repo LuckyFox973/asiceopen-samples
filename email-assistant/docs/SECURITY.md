@@ -108,17 +108,54 @@ ever fetched.
 real client mail, add authentication to the read API — it is deliberately
 listed as a phase 2 prerequisite in the roadmap rather than left implicit.
 
+## API authentication
+
+Every endpoint that reads mail or controls a mailbox requires an API key,
+presented as `Authorization: Bearer <key>`. `/health` stays open so a load
+balancer can probe it.
+
+Keys are long random tokens stored **only as SHA-256 hashes** — a database dump
+yields no usable credential, and a lost key can be replaced but never
+recovered. Each key is named, individually revocable, optionally expiring, and
+records when it was last used. Issuing and revoking are both audited.
+
+```bash
+python -m app.cli api-key create mcp-server
+python -m app.cli api-key list
+python -m app.cli api-key revoke eaa_AbCdEf12
+```
+
+Authentication is off by default in development only. **Production always
+requires it**: `require_api_auth` ignores `API_AUTH_ENABLED=false` outside
+development, so a deployment cannot expose a mailbox by forgetting a setting.
+A test asserts this.
+
+## OAuth callback protection
+
+The callback cannot carry an API key — Google redirects a browser to it — so it
+is protected by a one-time state token instead. Starting a flow records a state
+in the database with a 15-minute lifetime; the callback verifies and burns it.
+A forged, expired or already-used state is rejected, so a third party cannot
+drive the flow and bind their own mailbox to this installation.
+
 ## Known limitations in phase 1
 
 Stated plainly rather than buried:
 
-1. **The read API has no user authentication.** Fine on localhost; not fine on
-   a public URL. Deploy `--no-allow-unauthenticated` until phase 2 adds it.
+1. **Contacts are global, not per mailbox.** One person may write to several of
+   your mailboxes, so contacts are deliberately not cascade-deleted with one.
+   That leaves personal data behind when a mailbox is removed;
+   `python -m app.cli prune-contacts` reclaims contacts no message refers to.
+   Client- and matter-scoped erasure in phase 2 will run this automatically.
 2. **No encryption at rest beyond the platform's own.** Cloud SQL and GCS
    encrypt by default; message bodies are not separately encrypted, because
    full-text search requires readable text. Customer-managed keys (CMEK) are
    the right answer if the threat model requires more.
 3. **No rate limiting** on the API.
-4. **`raw_headers` keeps routing headers** — sender IPs and mail paths. This is
+4. **Unreferenced attachment bytes are reported, never auto-deleted.**
+   `python -m app.cli prune-contacts` also lists stored files no message points
+   at. Erasing a document is a decision for a person, not a side effect of
+   housekeeping.
+5. **`raw_headers` keeps routing headers** — sender IPs and mail paths. This is
    deliberate for forensics but is personal data; it is covered by the same
    deletion cascade.

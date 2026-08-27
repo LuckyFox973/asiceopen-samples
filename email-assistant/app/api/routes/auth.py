@@ -6,11 +6,11 @@ it stores only the refresh token, encrypted.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import SessionDep, SettingsDep
+from app.api.deps import SessionDep, SettingsDep, require_api_key
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.gmail.client import GmailClient
@@ -21,17 +21,23 @@ from app.gmail.oauth import (
     to_identity,
 )
 from app.schemas.common import AuthStartOut
+from app.services.access import consume_oauth_state, issue_oauth_state
 from app.services.accounts import refresh_send_as_addresses, upsert_account_from_identity
 
 router = APIRouter(prefix="/auth/google", tags=["auth"])
 log = get_logger(__name__)
 
 
-@router.post("/start", response_model=AuthStartOut)
-def start_authorisation(settings: Settings = SettingsDep) -> AuthStartOut:
+@router.post(
+    "/start", response_model=AuthStartOut, dependencies=[Depends(require_api_key)]
+)
+def start_authorisation(
+    session: Session = SessionDep, settings: Settings = SettingsDep
+) -> AuthStartOut:
     """Return the Google consent URL to open in a browser."""
     try:
-        url, state = build_authorisation_url(settings)
+        state = issue_oauth_state(session)
+        url, _ = build_authorisation_url(settings, state=state)
     except OAuthNotConfiguredError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return AuthStartOut(
@@ -58,6 +64,19 @@ def oauth_callback(
         return HTMLResponse(_page("Authorisation cancelled", error), status_code=400)
     if not code:
         return HTMLResponse(_page("Missing code", "No authorisation code."), status_code=400)
+
+    # The callback carries no API key — Google redirects the browser here — so
+    # the one-time state token is what proves this flow is the one we started.
+    if not consume_oauth_state(session, state):
+        log.warning("oauth.state_rejected", state_present=bool(state))
+        return HTMLResponse(
+            _page(
+                "Authorisation rejected",
+                "This callback did not match an authorisation flow started by "
+                "this service, or it has already been used. Start again.",
+            ),
+            status_code=400,
+        )
 
     try:
         credentials = exchange_code(code, state=state, settings=settings)

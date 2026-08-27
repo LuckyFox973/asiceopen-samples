@@ -70,10 +70,16 @@ def build_flow(settings: Settings | None = None, state: str | None = None) -> Fl
     return flow
 
 
-def build_authorisation_url(settings: Settings | None = None) -> tuple[str, str]:
-    """Return ``(url, state)``. The caller must remember *state* until callback."""
+def build_authorisation_url(
+    settings: Settings | None = None, state: str | None = None
+) -> tuple[str, str]:
+    """Return ``(url, state)``.
+
+    The caller supplies *state* when it intends to verify it on callback; a
+    generated one is a convenience for the CLI, which cannot.
+    """
     settings = settings or get_settings()
-    state = secrets.token_urlsafe(32)
+    state = state or secrets.token_urlsafe(32)
     flow = build_flow(settings, state=state)
     url, _ = flow.authorization_url(
         access_type="offline",  # required to receive a refresh token

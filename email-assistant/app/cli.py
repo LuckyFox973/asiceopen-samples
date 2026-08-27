@@ -34,7 +34,15 @@ from app.db.models import (
     MailboxAccount,
 )
 from app.db.session import session_scope
+from app.services.access import (
+    OAUTH_STATE_TTL,
+    create_api_key,
+    issue_oauth_state,
+    list_api_keys,
+    revoke_api_key,
+)
 from app.services.accounts import get_account_by_email, list_accounts
+from app.services.maintenance import find_unreferenced_blobs, prune_orphan_contacts
 from app.services.runner import run_sync
 from app.services.search import MessageSearchQuery, search_messages
 
@@ -83,14 +91,68 @@ def cmd_keygen(_args: argparse.Namespace) -> int:
 def cmd_auth_url(_args: argparse.Namespace) -> int:
     from app.gmail.oauth import OAuthNotConfiguredError, build_authorisation_url
 
-    try:
-        url, state = build_authorisation_url()
-    except OAuthNotConfiguredError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    # The state is recorded in the database so the callback recognises this
+    # flow as ours; without that it would — correctly — reject it.
+    with session_scope() as session:
+        try:
+            state = issue_oauth_state(session)
+            url, _ = build_authorisation_url(state=state)
+        except OAuthNotConfiguredError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     print("Open this URL in a browser and approve access:\n")
     print(url)
-    print(f"\n(state: {state})")
+    print(f"\nValid for {int(OAUTH_STATE_TTL.total_seconds() // 60)} minutes.")
+    return 0
+
+
+def cmd_api_key(args: argparse.Namespace) -> int:
+    with session_scope() as session:
+        if args.action == "create":
+            issued = create_api_key(session, args.name, expires_in_days=args.expires_in_days)
+            print("API key created. It is shown once and cannot be recovered:\n")
+            print(f"  {issued.key}\n")
+            print(f"name    : {issued.record.name}")
+            print(f"prefix  : {issued.record.prefix}")
+            print(f"expires : {issued.record.expires_at or 'never'}")
+            print("\nUse it as:  Authorization: Bearer <key>")
+            return 0
+
+        if args.action == "list":
+            keys = list_api_keys(session, include_revoked=args.all)
+            if not keys:
+                print("No API keys. Create one: python -m app.cli api-key create <name>")
+                return 0
+            for key in keys:
+                state = "revoked" if key.revoked_at else "active"
+                used = key.last_used_at.strftime("%Y-%m-%d %H:%M") if key.last_used_at else "never"
+                print(f"{key.prefix}…  {key.name:<24} [{state}]  last used: {used}")
+            return 0
+
+        record = revoke_api_key(session, args.name)
+        if record is None:
+            print(f"No API key matches {args.name!r}", file=sys.stderr)
+            return 1
+        print(f"Revoked {record.name!r} ({record.prefix}…)")
+        return 0
+
+
+def cmd_prune_contacts(args: argparse.Namespace) -> int:
+    with session_scope() as session:
+        count = prune_orphan_contacts(session, dry_run=args.dry_run)
+        verb = "would remove" if args.dry_run else "removed"
+        print(f"{verb} {count} contact(s) no message refers to")
+
+        blobs = find_unreferenced_blobs(session)
+        if blobs:
+            total = sum(b.size_bytes for b in blobs)
+            print(
+                f"\n{len(blobs)} stored file(s) ({total:,} bytes) are no longer "
+                "referenced by any message."
+            )
+            print("They are reported, not deleted — erasing a document is your decision.")
+            for blob in blobs[:10]:
+                print(f"  {blob.sha256[:16]}…  {blob.size_bytes:>10,} B  {blob.mime_type}")
     return 0
 
 
@@ -149,7 +211,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         print(f"{results.total} match(es); showing {len(results.hits)}\n")
         for hit in results.hits:
             message = hit.message
-            when = (message.internal_date or message.sent_at)
+            when = message.internal_date or message.sent_at
             stamp = when.strftime("%Y-%m-%d %H:%M") if when else "?"
             arrow = {"inbound": "<-", "outbound": "->", "internal": "<>"}.get(
                 message.direction, "??"
@@ -195,28 +257,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="app.cli", description="Email AI Assistant")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("check", help="verify configuration and database").set_defaults(
-        func=cmd_check
-    )
-    sub.add_parser("keygen", help="generate a TOKEN_ENCRYPTION_KEY").set_defaults(
-        func=cmd_keygen
-    )
-    sub.add_parser("auth-url", help="print the Google consent URL").set_defaults(
-        func=cmd_auth_url
-    )
-    sub.add_parser("accounts", help="list connected mailboxes").set_defaults(
-        func=cmd_accounts
-    )
+    sub.add_parser("check", help="verify configuration and database").set_defaults(func=cmd_check)
+    sub.add_parser("keygen", help="generate a TOKEN_ENCRYPTION_KEY").set_defaults(func=cmd_keygen)
+    sub.add_parser("auth-url", help="print the Google consent URL").set_defaults(func=cmd_auth_url)
+    sub.add_parser("accounts", help="list connected mailboxes").set_defaults(func=cmd_accounts)
 
     sync_parser = sub.add_parser("sync", help="synchronise a mailbox")
     sync_parser.add_argument("account", help="mailbox e-mail address or id")
-    sync_parser.add_argument(
-        "--mode", choices=["auto", "initial", "incremental"], default="auto"
-    )
+    sync_parser.add_argument("--mode", choices=["auto", "initial", "incremental"], default="auto")
     sync_parser.add_argument("--start-date", help="override the start date (YYYY-MM-DD)")
-    sync_parser.add_argument(
-        "--no-attachments", action="store_true", help="store metadata only"
-    )
+    sync_parser.add_argument("--no-attachments", action="store_true", help="store metadata only")
     sync_parser.set_defaults(func=cmd_sync)
 
     search_parser = sub.add_parser("search", help="full-text search stored mail")
@@ -228,6 +278,19 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.set_defaults(func=cmd_search)
 
     sub.add_parser("stats", help="show what is stored").set_defaults(func=cmd_stats)
+
+    key_parser = sub.add_parser("api-key", help="manage API keys")
+    key_parser.add_argument("action", choices=["create", "list", "revoke"])
+    key_parser.add_argument(
+        "name", nargs="?", default="", help="key name (create) or name/prefix (revoke)"
+    )
+    key_parser.add_argument("--expires-in-days", type=int, default=None)
+    key_parser.add_argument("--all", action="store_true", help="include revoked keys when listing")
+    key_parser.set_defaults(func=cmd_api_key)
+
+    prune_parser = sub.add_parser("prune-contacts", help="remove contacts no message refers to")
+    prune_parser.add_argument("--dry-run", action="store_true")
+    prune_parser.set_defaults(func=cmd_prune_contacts)
     return parser
 
 
