@@ -1,0 +1,161 @@
+"""Load a few sample messages through the real pipeline.
+
+Only the Gmail transport is replaced by a fixture; the parser, the ingest
+layer, the attachment store and the search index are the production ones.
+Use it to see the system working before the Google project exists.
+
+    python scripts/demo_seed.py          # load
+    python scripts/demo_seed.py --reset  # remove the demo mailbox first
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sqlalchemy import select
+
+from app.db.models import MailboxAccount, MailboxAddress
+from app.db.session import session_scope
+from app.services.storage import build_storage
+from app.services.sync import SyncEngine
+from tests.fixtures import attachment_part, gmail_message, multipart, text_part
+from tests.fixtures.fake_gmail import FakeGmailClient
+
+DEMO_EMAIL = "demo@example.invalid"
+BASE = int(datetime(2026, 8, 20, 8, 0, tzinfo=UTC).timestamp() * 1000)
+
+
+def hours(n: int) -> str:
+    return str(BASE + n * 3600_000)
+
+
+def build_messages():
+    podklady = multipart(
+        "multipart/mixed",
+        [
+            text_part(
+                "Dobrý deň,\n\nv prílohe posielam rozhodnutie správcu dane o daňovej "
+                "kontrole DPH za rok 2025. Prosím o vyjadrenie do konca mesiaca.\n\n"
+                "S pozdravom\nJán Novák, ABC s.r.o.",
+                part_id="0",
+            ),
+            attachment_part(
+                "Rozhodnutie.pdf", size=23, attachment_id="att-rozhodnutie", part_id="1"
+            ),
+        ],
+    )
+    return [
+        gmail_message(
+            message_id="demo-1",
+            thread_id="demo-t1",
+            subject="Daňová kontrola DPH 2025 – podklady",
+            from_="Ján Novák <jan.novak@abc.sk>",
+            to=DEMO_EMAIL,
+            internal_date_ms=hours(0),
+            payload=podklady,
+            labels=["INBOX", "UNREAD"],
+        ),
+        gmail_message(
+            message_id="demo-2",
+            thread_id="demo-t1",
+            subject="Re: Daňová kontrola DPH 2025 – podklady",
+            from_=f"Demo <{DEMO_EMAIL}>",
+            to="jan.novak@abc.sk",
+            internal_date_ms=hours(3),
+            payload=text_part(
+                "Dobrý deň,\n\npodklady som prevzal. Vyjadrenie pripravím do 31.08.2026.\n"
+            ),
+            labels=["SENT"],
+        ),
+        gmail_message(
+            message_id="demo-3",
+            thread_id="demo-t2",
+            subject="KOVACO – kasačná sťažnosť",
+            from_="Podateľňa <podatelna@justice.example>",
+            to=DEMO_EMAIL,
+            internal_date_ms=hours(26),
+            payload=text_part(
+                "Správca dane v odôvodnení tvrdil, že predložené CMR listy boli "
+                "duplicitné a nepreukazujú prepravu tovaru.",
+                charset="windows-1250",
+            ),
+            labels=["INBOX"],
+        ),
+        gmail_message(
+            message_id="demo-4",
+            thread_id="demo-t3",
+            subject="Newsletter – zmeny v daňovom poriadku",
+            from_="noreply@newsletter.example",
+            to=DEMO_EMAIL,
+            internal_date_ms=hours(30),
+            payload=text_part("Prehľad legislatívnych zmien účinných od 01.01.2027."),
+            labels=["INBOX", "CATEGORY_PROMOTIONS"],
+        ),
+    ]
+
+
+def reset(session) -> None:
+    account = session.scalar(select(MailboxAccount).where(MailboxAccount.email == DEMO_EMAIL))
+    if account is not None:
+        session.delete(account)
+        session.flush()
+        print(f"removed demo mailbox {DEMO_EMAIL}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reset", action="store_true")
+    args = parser.parse_args()
+
+    with session_scope() as session:
+        if args.reset:
+            reset(session)
+
+        account = session.scalar(select(MailboxAccount).where(MailboxAccount.email == DEMO_EMAIL))
+        if account is None:
+            account = MailboxAccount(
+                email=DEMO_EMAIL,
+                display_name="Demo mailbox",
+                sync_start_date=date(2026, 8, 1),
+            )
+            session.add(account)
+            session.flush()
+            session.add(
+                MailboxAddress(
+                    account_id=account.id,
+                    address=DEMO_EMAIL,
+                    is_primary=True,
+                    source="primary",
+                )
+            )
+            session.flush()
+            session.refresh(account)
+
+        engine = SyncEngine(
+            session=session,
+            account=account,
+            client=FakeGmailClient(
+                build_messages(),
+                attachments={"att-rozhodnutie": b"%PDF-1.7 demo rozhodnutie"},
+            ),
+            storage=build_storage(),
+            default_start_date=date(2026, 8, 1),
+            download_attachments=True,
+        )
+        run = engine.initial_sync()
+        print(
+            f"{run.kind} sync {run.status}: {run.messages_created} new, "
+            f"{run.messages_updated} updated, {run.messages_skipped} unchanged, "
+            f"{run.attachments_created} attachments"
+        )
+        print(f"mailbox id: {account.id}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

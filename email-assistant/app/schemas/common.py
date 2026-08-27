@@ -1,0 +1,149 @@
+"""Response schemas shared across the API."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime
+from typing import Generic, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field
+
+T = TypeVar("T")
+
+
+class ORMModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Page(BaseModel, Generic[T]):
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
+
+
+class HealthResponse(BaseModel):
+    status: str
+    environment: str
+    database: str
+    version: str
+
+
+class AccountOut(ORMModel):
+    id: uuid.UUID
+    email: str
+    display_name: str | None
+    is_active: bool
+    sync_start_date: date | None
+    authorised_at: datetime | None
+    addresses: list[str] = Field(default_factory=list)
+
+
+class SyncStateOut(ORMModel):
+    last_history_id: int | None
+    initial_sync_completed_at: datetime | None
+    last_sync_at: datetime | None
+    total_messages_synced: int
+    initial_sync_pending: bool
+
+
+class SyncRunOut(ORMModel):
+    id: uuid.UUID
+    kind: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    messages_seen: int
+    messages_created: int
+    messages_updated: int
+    messages_skipped: int
+    threads_touched: int
+    attachments_created: int
+    error: str | None
+
+
+class SyncStatusOut(BaseModel):
+    account: AccountOut
+    state: SyncStateOut | None
+    last_runs: list[SyncRunOut]
+    counts: dict[str, int]
+
+
+class ParticipantOut(ORMModel):
+    kind: str
+    address: str
+    display_name: str | None
+    is_own: bool
+
+
+class AttachmentOut(ORMModel):
+    id: uuid.UUID
+    filename: str | None
+    mime_type: str | None
+    size_bytes: int | None
+    is_inline: bool
+    download_status: str
+    sha256: str | None = None
+
+
+class MessageOut(ORMModel):
+    id: uuid.UUID
+    gmail_message_id: str
+    gmail_thread_id: str
+    thread_id: uuid.UUID
+    subject: str | None
+    from_address: str | None
+    from_name: str | None
+    account_address: str | None
+    direction: str
+    sent_at: datetime | None
+    internal_date: datetime | None
+    snippet: str | None
+    labels: list[str] | None
+    has_attachments: bool
+    rank: float | None = None
+    highlight: str | None = None
+
+
+class MessageDetailOut(MessageOut):
+    body_text: str | None
+    body_html: str | None
+    rfc822_message_id: str | None
+    in_reply_to: str | None
+    references: list[str] | None
+    participants: list[ParticipantOut] = Field(default_factory=list)
+    attachments: list[AttachmentOut] = Field(default_factory=list)
+
+
+class ThreadOut(ORMModel):
+    id: uuid.UUID
+    gmail_thread_id: str
+    subject: str | None
+    snippet: str | None
+    message_count: int
+    first_message_at: datetime | None
+    last_message_at: datetime | None
+    last_message_direction: str | None
+
+
+class ThreadDetailOut(ThreadOut):
+    messages: list[MessageDetailOut] = Field(default_factory=list)
+
+
+class AuthStartOut(BaseModel):
+    authorisation_url: str
+    state: str
+    instructions: str
+
+
+class StatsOut(BaseModel):
+    accounts: int
+    threads: int
+    messages: int
+    attachments: int
+    attachment_blobs: int
+    attachment_bytes: int
+    contacts: int
+    messages_by_direction: dict[str, int]
+    oldest_message: datetime | None
+    newest_message: datetime | None
