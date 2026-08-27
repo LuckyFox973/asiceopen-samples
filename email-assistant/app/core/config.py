@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AppEnv = Literal["development", "staging", "production"]
 AttachmentBackend = Literal["local", "gcs"]
+BackupBackend = Literal["local", "gdrive"]
 
 # Minimum Gmail scopes for MVP 1.  Read-only: the assistant cannot send,
 # delete or modify anything.  Write scopes are added deliberately in a later
@@ -25,6 +26,10 @@ GMAIL_SCOPES_READONLY: tuple[str, ...] = (
     "https://www.googleapis.com/auth/userinfo.email",
     "openid",
 )
+
+# Added only when Drive backups are enabled.  Grants access to files this
+# application creates and to nothing else in the user's Drive.
+DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
 
 class Settings(BaseSettings):
@@ -66,6 +71,25 @@ class Settings(BaseSettings):
     attachment_gcs_bucket: str = ""
     attachment_max_bytes: int = 25 * 1024 * 1024
 
+    # --- Backups -----------------------------------------------------------
+    backup_enabled: bool = False
+    backup_backend: BackupBackend = "local"
+    backup_local_path: str = "./data/backups"
+    backup_gdrive_folder: str = "EmailAssistantBackups"
+    # Separate from TOKEN_ENCRYPTION_KEY on purpose: a backup key may have to
+    # be shared with whoever performs a restore, without handing them the key
+    # that unlocks live mailbox credentials.
+    backup_encryption_key: str = ""
+    backup_retention: int = Field(default=14, ge=1)
+    backup_include_attachments: bool = False
+    # Which mailbox's Google credentials to use for Drive uploads.
+    # Empty means the first active mailbox.
+    backup_account_email: str = ""
+
+    # --- Local scheduler -----------------------------------------------------
+    scheduler_sync_interval_minutes: int = Field(default=15, ge=1)
+    scheduler_backup_hour: int = Field(default=3, ge=0, le=23)
+
     # --- Internal job auth -------------------------------------------------
     job_auth_token: str = ""
 
@@ -96,7 +120,16 @@ class Settings(BaseSettings):
 
     @property
     def gmail_scopes(self) -> list[str]:
-        return list(GMAIL_SCOPES_READONLY)
+        """Scopes requested at consent.
+
+        The Drive scope is added only when Drive backups are configured, and
+        it is ``drive.file`` — access limited to files this application itself
+        creates, never the rest of the Drive.
+        """
+        scopes = list(GMAIL_SCOPES_READONLY)
+        if self.backup_enabled and self.backup_backend == "gdrive":
+            scopes.append(DRIVE_FILE_SCOPE)
+        return scopes
 
     def oauth_configured(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret)

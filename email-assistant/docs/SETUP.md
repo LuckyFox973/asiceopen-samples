@@ -118,7 +118,52 @@ Moving the date **later** does not delete anything already stored. Moving it
 **earlier** does not backfill automatically — that is a deliberate operation,
 so a mistyped date can never quietly pull in years of mail.
 
-## 4. Production deployment (planned — phase 2)
+## 4. Running it continuously, on your own machine
+
+Two ways. Either works; Docker is fewer moving parts.
+
+### With Docker
+
+```bash
+cp .env.example .env          # fill in, including BACKUP_ENCRYPTION_KEY
+make up                       # database + migrations + API + scheduler
+make logs
+make down                     # stops; volumes are kept
+```
+
+Ports bind to `127.0.0.1` only — the API holds mailbox contents and must not be
+reachable from the local network.
+
+### Without Docker
+
+```bash
+make run       # API on :8000
+make daemon    # sync every SCHEDULER_SYNC_INTERVAL_MINUTES, backup daily
+```
+
+To keep the scheduler running across logins on macOS, a `launchd` agent calling
+`python -m app.cli daemon` is the native way; `caffeinate -s` prevents sleep
+while it runs.
+
+**The limitation to be clear about:** none of this runs while the machine is
+off. Overnight synchronisation and an early-morning briefing need a server.
+Everything else works exactly the same locally.
+
+## 5. Backups
+
+```bash
+python -m app.core.crypto keygen        # BACKUP_ENCRYPTION_KEY — store it in a
+                                        # password manager too, not only here
+python -m app.cli backup run
+python -m app.cli backup list
+python -m app.cli backup verify <archive>
+```
+
+For Google Drive, set `BACKUP_BACKEND=gdrive` and re-run the consent flow — the
+Drive scope is only requested when Drive backups are enabled. Full details,
+including how to restore, are in [BACKUP.md](BACKUP.md).
+
+## 6. Production deployment (when it is time)
 
 The hosting decision is still open; see *Architecture → Hosting*. The intended
 Google Cloud shape:
@@ -164,7 +209,7 @@ container start — an autoscaled service must not race itself into the schema.
 - `GOOGLE_OAUTH_REDIRECT_URI` is HTTPS
 - `DATABASE_URL` does not point at localhost
 
-## 5. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
@@ -173,4 +218,7 @@ container start — an autoscaled service must not race itself into the schema.
 | Sync reports `partial` | Per-run cap reached; run again to continue from the checkpoint |
 | `historyId ... no longer available` | Normal after a long gap; the engine falls back to a date-bounded pass automatically |
 | Tests skipped | The test database is unreachable; check `TEST_DATABASE_URL` |
+| `BACKUP_ENCRYPTION_KEY is not set` | Deliberate: a backup holds every stored message and is never written unencrypted |
+| `authorised without the Drive scope` | Set `BACKUP_BACKEND=gdrive`, then re-run `auth-url` and approve again |
+| `pg_dump is not on PATH` | macOS: `brew install libpq && brew link --force libpq` |
 | `cannot insert a non-DEFAULT value into column "search_vector"` | The model and migration disagree; run `alembic check` |

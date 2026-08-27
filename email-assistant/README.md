@@ -5,10 +5,16 @@ durable copy of the mailboxes it is given — messages, threads, participants an
 attachments — so that knowledge survives independently of any single AI
 conversation or context window.
 
-**Status: Phase 1 (MVP 1) complete and tested.** Gmail ingest, persistence,
-search and audit work end to end. There is no AI layer yet, and by design no
-ability to send, delete or modify mail — the OAuth scopes requested are
-read-only.
+**Status: runs locally, end to end.** Gmail ingest, persistence, search, audit,
+API authentication, a local scheduler and encrypted backups all work and are
+tested. There is no AI layer yet, and by design no ability to send, delete or
+modify mail — the OAuth scopes requested are read-only.
+
+It runs on your own machine for now, deliberately: no cloud bill until the
+system has proved itself. The one honest cost of that is that **nothing runs
+while the machine is off** — no overnight sync, no early-morning briefing.
+Moving to a server later is a change of `DATABASE_URL` and a scheduler, not a
+rewrite.
 
 ## What works today
 
@@ -27,6 +33,8 @@ read-only.
 | Audit | Every sync run recorded with counts, errors and outcome |
 | Access control | Hashed, revocable API keys; forced on outside development |
 | OAuth safety | One-time state token verified on callback |
+| Scheduling | Local daemon: sync on an interval, backup once a day |
+| Backups | Encrypted (AES-256-GCM) to disk or Google Drive, with retention |
 
 ## Quick start
 
@@ -36,7 +44,7 @@ make dev-db           # local PostgreSQL databases + extensions
 cp .env.example .env
 python -m app.core.crypto keygen     # paste into TOKEN_ENCRYPTION_KEY
 make migrate
-make test             # 182 tests
+make test             # 236 tests
 make seed             # load demo mail through the real pipeline
 make run              # API on http://localhost:8000  (docs at /docs)
 ```
@@ -57,7 +65,24 @@ python -m app.cli stats
 python -m app.cli api-key create mcp-server   # shown once, stored hashed
 python -m app.cli api-key list
 python -m app.cli prune-contacts              # reclaim orphaned personal data
+
+python -m app.cli backup run                  # encrypted; refuses without a key
+python -m app.cli backup verify <archive>
+python -m app.cli daemon                      # sync on an interval + daily backup
 ```
+
+## Running the whole stack
+
+With Docker (PostgreSQL, API and scheduler together):
+
+```bash
+make up        # starts the database, migrates, then brings up api + scheduler
+make logs
+make down      # stops; volumes are kept
+```
+
+Ports are bound to `127.0.0.1` only — the API holds mailbox contents and must
+not be reachable from the local network.
 
 ## Documentation
 
@@ -65,6 +90,7 @@ python -m app.cli prune-contacts              # reclaim orphaned personal data
 - [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) — tables that exist now and the ones planned
 - [`docs/SETUP.md`](docs/SETUP.md) — local setup and Google Cloud configuration
 - [`docs/SECURITY.md`](docs/SECURITY.md) — scopes, secrets, GDPR, deletion and export
+- [`docs/BACKUP.md`](docs/BACKUP.md) — what is backed up, encryption, and how to restore
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phases, what is done and what comes next
 
 ## Layout
@@ -74,7 +100,8 @@ app/
   core/       configuration, encryption, logging, startup checks
   db/         SQLAlchemy models and session handling
   gmail/      OAuth, API client, MIME parser, address logic
-  services/   sync engine, ingest, storage, search, accounts
+  services/   sync engine, ingest, storage, search, accounts,
+              access control, backups, local scheduler
   api/        FastAPI routes and schemas
   cli.py      operational commands
 alembic/      migrations (the only way the schema is ever created)

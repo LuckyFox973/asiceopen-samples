@@ -6,6 +6,7 @@ scheduled jobs and the CLI.
 
 from __future__ import annotations
 
+from google.oauth2.credentials import Credentials
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -21,10 +22,14 @@ from app.services.sync import SyncEngine
 log = get_logger(__name__)
 
 
-def build_client(
+def build_credentials(
     session: Session, account: MailboxAccount, settings: Settings | None = None
-) -> GmailClient:
-    """Build an authenticated Gmail client, refreshing the token if needed."""
+) -> Credentials:
+    """Usable Google credentials for one mailbox, refreshed if expired.
+
+    Shared by every Google API this system talks to — Gmail, and Drive for
+    backups — so a refreshed token is persisted once, in one place.
+    """
     settings = settings or get_settings()
     credentials = credentials_from_stored(
         account.oauth_refresh_token_enc,
@@ -37,7 +42,14 @@ def build_client(
         account.oauth_access_token_enc = cipher.encrypt(credentials.token)
         account.oauth_token_expiry = credentials.expiry
         session.flush()
-    return GmailClient(credentials)
+    return credentials
+
+
+def build_client(
+    session: Session, account: MailboxAccount, settings: Settings | None = None
+) -> GmailClient:
+    """Build an authenticated Gmail client, refreshing the token if needed."""
+    return GmailClient(build_credentials(session, account, settings))
 
 
 def run_sync(

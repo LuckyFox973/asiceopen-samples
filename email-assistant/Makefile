@@ -1,4 +1,5 @@
-.PHONY: help install dev-db migrate test lint format check run seed clean
+.PHONY: help install dev-db migrate test lint format check run daemon seed backup \
+        up down logs clean
 
 PY := .venv/bin/python
 
@@ -31,8 +32,25 @@ check:  ## verify configuration and database connectivity
 run:  ## start the API on :8000
 	.venv/bin/uvicorn app.main:app --reload --port 8000
 
+daemon:  ## run sync (and daily backup) locally, on a schedule
+	$(PY) -m app.cli daemon
+
 seed:  ## load demo mail through the real pipeline
 	$(PY) scripts/demo_seed.py --reset
+
+backup:  ## take an encrypted backup now
+	$(PY) -m app.cli backup run
+
+up:  ## start the whole stack in Docker (db + api + scheduler)
+	docker compose up -d db
+	docker compose run --rm api alembic upgrade head
+	docker compose up -d
+
+down:  ## stop the Docker stack (volumes are kept)
+	docker compose down
+
+logs:  ## follow the Docker stack logs
+	docker compose logs -f
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache htmlcov .coverage

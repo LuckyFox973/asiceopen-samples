@@ -1,0 +1,71 @@
+# Local stack: PostgreSQL, the API, and the scheduler.
+#
+#   cp .env.example .env      and fill it in
+#   docker compose up -d db
+#   docker compose run --rm api alembic upgrade head
+#   docker compose up -d
+#
+# Everything stays on this machine.  Moving to a server later means pointing
+# DATABASE_URL somewhere else — no code changes.
+
+name: email-assistant
+
+services:
+  db:
+    # Carries pgvector, which phase 3 needs and plain postgres images lack.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-eaa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-email_assistant}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      # Exposed on loopback only — never on the machine's network interface.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eaa} -d ${POSTGRES_DB:-email_assistant}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build: .
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-eaa}:${POSTGRES_PASSWORD:-devpassword}@db:5432/${POSTGRES_DB:-email_assistant}
+      ATTACHMENT_LOCAL_PATH: /data/attachments
+      BACKUP_LOCAL_PATH: /data/backups
+    volumes:
+      - attachments:/data/attachments
+      - backups:/data/backups
+    ports:
+      # Loopback only: the API holds mailbox contents and must not be
+      # reachable from the local network.
+      - "127.0.0.1:8000:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    command: ["python", "-m", "app.cli", "daemon"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-eaa}:${POSTGRES_PASSWORD:-devpassword}@db:5432/${POSTGRES_DB:-email_assistant}
+      ATTACHMENT_LOCAL_PATH: /data/attachments
+      BACKUP_LOCAL_PATH: /data/backups
+    volumes:
+      - attachments:/data/attachments
+      - backups:/data/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  attachments:
+  backups:

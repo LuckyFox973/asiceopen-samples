@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -26,6 +27,11 @@ from app.services.maintenance import find_unreferenced_blobs, prune_orphan_conta
 from tests.conftest import requires_db
 
 pytestmark = [pytest.mark.integration, requires_db]
+
+
+def _orphan_count(session) -> int:
+    """Contacts no message refers to, right now."""
+    return prune_orphan_contacts(session, dry_run=True)
 
 
 class TestApiKeyLifecycle:
@@ -127,26 +133,23 @@ class TestOAuthState:
 
 class TestMaintenance:
     def test_orphan_contacts_are_removed(self, db_session):
-        db_session.add(
-            Contact(primary_address="orphan@example.sk", domain="example.sk")
-        )
+        address = f"orphan-{uuid.uuid4().hex[:8]}@example.sk"
+        db_session.add(Contact(primary_address=address, domain="example.sk"))
         db_session.flush()
-        assert prune_orphan_contacts(db_session) == 1
-        assert (
-            db_session.scalar(
-                select(Contact).where(Contact.primary_address == "orphan@example.sk")
-            )
-            is None
-        )
+
+        # Counted as a delta: the shared test database may hold other rows.
+        before = _orphan_count(db_session)
+        removed = prune_orphan_contacts(db_session)
+
+        assert removed == before
+        assert db_session.scalar(select(Contact).where(Contact.primary_address == address)) is None
 
     def test_referenced_contacts_survive(self, db_session, account):
         from tests.fixtures import gmail_message
         from tests.fixtures.fake_gmail import FakeGmailClient
         from tests.integration.test_sync import engine_for
 
-        client = FakeGmailClient(
-            [gmail_message(from_="klient@abc.sk", to="info@foxgroup.sk")]
-        )
+        client = FakeGmailClient([gmail_message(from_="klient@abc.sk", to="info@foxgroup.sk")])
         engine_for(db_session, account, client).initial_sync()
 
         prune_orphan_contacts(db_session)
@@ -154,13 +157,18 @@ class TestMaintenance:
         assert "klient@abc.sk" in remaining
 
     def test_dry_run_counts_without_deleting(self, db_session):
-        db_session.add(Contact(primary_address="orphan@example.sk"))
+        address = f"orphan-{uuid.uuid4().hex[:8]}@example.sk"
+        before = _orphan_count(db_session)
+        db_session.add(Contact(primary_address=address))
         db_session.flush()
-        assert prune_orphan_contacts(db_session, dry_run=True) == 1
-        assert prune_orphan_contacts(db_session, dry_run=True) == 1
+
+        assert prune_orphan_contacts(db_session, dry_run=True) == before + 1
+        # Still there, and still counted — a dry run deletes nothing.
+        assert prune_orphan_contacts(db_session, dry_run=True) == before + 1
+        assert db_session.scalar(select(Contact).where(Contact.primary_address == address))
 
     def test_pruning_is_audited(self, db_session):
-        db_session.add(Contact(primary_address="orphan@example.sk"))
+        db_session.add(Contact(primary_address=f"orphan-{uuid.uuid4().hex[:8]}@example.sk"))
         db_session.flush()
         prune_orphan_contacts(db_session)
         assert db_session.scalar(

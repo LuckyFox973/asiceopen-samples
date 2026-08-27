@@ -39,8 +39,9 @@ in PostgreSQL would make backups enormous and restores slow, for no benefit.
 | Database | PostgreSQL 16 | Requested. One engine covers relational data, full-text and (with `pgvector`) semantic search — no separate search cluster |
 | ORM / migrations | SQLAlchemy 2.0 + Alembic | Requested; migrations are the only way schema is ever created, including in tests |
 | Blob storage | Content-addressed store, local in dev, GCS in production | Deduplication and a single place to delete or export a file |
-| Background work | Cloud Scheduler → authenticated HTTP endpoint | No Redis, no Celery, no broker to operate |
-| Runtime | Cloud Run | Scales to zero, runs without your Mac, HTTPS and secrets built in |
+| Background work | A local loop now; Cloud Scheduler → authenticated HTTP endpoint later | No Redis, no Celery, no broker to operate |
+| Runtime | Your machine now, Cloud Run when it earns it | Defers the bill; the code is identical either way |
+| Backups | Encrypted archives to disk or Google Drive | The account already exists and has space |
 | Secrets | `.env` in dev, Secret Manager in production | Nothing secret is ever committed |
 | Tests | pytest against real PostgreSQL | The schema uses generated columns and GIN indexes; SQLite would test a fiction |
 
@@ -55,7 +56,21 @@ in PostgreSQL would make backups enormous and restores slow, for no benefit.
 - **A message queue for ingest** — Gmail's own `historyId` cursor already gives
   at-least-once delivery with resumability. Adding a queue would duplicate it.
 
-### Hosting: the one decision still open
+### Hosting: local first, deliberately
+
+The system runs on your own machine for now. That defers every cloud cost until
+it has proved itself, and nothing about it is a dead end: the backend is a
+container, the database is plain PostgreSQL, and the scheduler is a loop that a
+Cloud Scheduler job replaces one-for-one. Moving to a server is configuration,
+not a rewrite.
+
+What local costs you, stated plainly: **it only runs while the machine is on.**
+Overnight synchronisation and an early-morning briefing cannot work on a
+sleeping laptop. Everything else — ingest, search, memory, backups — is
+unaffected. When that limitation starts to bite, the comparison below is the
+decision to make.
+
+### Hosting: the decision, for when it is time
 
 Two viable options, both plain PostgreSQL so the code is identical:
 
@@ -70,8 +85,13 @@ Two viable options, both plain PostgreSQL so the code is identical:
 For mail that includes privileged client communication, keeping everything in a
 single GCP project you control is the cleaner story for a data-processing
 record — one processor, one region, one audit trail. Supabase is materially
-easier and cheaper to start with. **This needs your decision before deployment;
-nothing in the code depends on it.**
+easier and cheaper to start with.
+
+Two facts worth carrying into that decision. Storage is **not** the cost:
+measured on real ingest, a message costs about 7 KB of database, so 10 000
+messages is ~67 MB — a rounding error against either plan's included storage.
+And a GCP project will be needed regardless once Gmail push notifications are
+wanted, because `users.watch` publishes only to Google Cloud Pub/Sub.
 
 Recommended region either way: `europe-west1` or `europe-central2` — EU data
 residency and low latency from Bratislava.
@@ -166,7 +186,26 @@ Phase 3 adds `pgvector` embeddings for genuinely semantic recall. It ranks
 *alongside* these modes rather than replacing them — exact lookups must stay
 exact.
 
-## Production topology (planned)
+## Backups
+
+Archives are encrypted before they leave the machine — chunked AES-256-GCM with
+a per-archive key, so a truncated or reordered archive fails to decrypt rather
+than yielding partial data. The database goes into every archive; attachment
+bytes do not by default, because they are still in Gmail and re-fetchable.
+Google Drive is the default remote, using the `drive.file` scope, which sees
+only files this application created. See [BACKUP.md](BACKUP.md).
+
+## Scheduling
+
+`python -m app.cli daemon` runs sync on an interval and one backup a day, with
+no broker and no worker pool. Each mailbox syncs in its own session, so one
+failure never rolls back another's committed work, and a failed backup does not
+mark the day done — the next cycle retries.
+
+On a server this loop is replaced by Cloud Scheduler calling
+`/api/v1/jobs/sync-all`. Same work, same code, different trigger.
+
+## Production topology (when it is time)
 
 ```
 Cloud Scheduler ──(OIDC)──▶ Cloud Run ──▶ Cloud SQL / Supabase

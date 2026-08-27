@@ -31,8 +31,13 @@ built in from phase 1, not retrofitted.
 |---|---|---|
 | Google client secret | `.env` (gitignored) | Secret Manager |
 | `TOKEN_ENCRYPTION_KEY` | `.env` | Secret Manager |
+| `BACKUP_ENCRYPTION_KEY` | `.env` **and a password manager** | Secret Manager + password manager |
 | Database password | `.env` | Secret Manager / IAM auth |
 | `JOB_AUTH_TOKEN` | unset (endpoints local only) | Secret Manager, required |
+
+`BACKUP_ENCRYPTION_KEY` is the one secret that must also live somewhere
+*outside* this machine. Every other secret can be regenerated; a lost backup
+key makes every archive permanently unreadable.
 
 `.gitignore` excludes `.env`, `*.pem`, `*.key`, `client_secret*.json`,
 `service-account*.json`, `credentials.json` and `token.json`. **No secret has
@@ -65,6 +70,27 @@ flow. Stored mail is unaffected.
   calling it as an authenticated service account.
 - The database should be reachable only over a private IP or the Cloud SQL
   connector — never a public address with a password.
+
+## Backups
+
+A dump of this database contains every client e-mail plus the encrypted OAuth
+tokens, so archives are encrypted before they leave the machine — chunked
+AES-256-GCM, per-archive key derived through HKDF, each chunk authenticating
+its own index and a final-chunk flag. A truncated or reordered archive fails to
+decrypt rather than silently yielding partial data.
+
+There is no unencrypted path: without `BACKUP_ENCRYPTION_KEY` the backup
+command refuses and writes nothing. It is deliberately a *different* key from
+`TOKEN_ENCRYPTION_KEY`, so a restore can be handed to someone without also
+handing over the key that unlocks live mailbox credentials.
+
+Backups to Google Drive use the **`drive.file`** scope — access to files this
+application itself creates, and nothing else in the Drive. That scope is
+requested only when Drive backups are configured; a mailbox authorised without
+it fails with instructions rather than a cryptic API error.
+
+Keep the key off the Drive you back up to. A key stored beside the archive
+protects nothing. Details in [BACKUP.md](BACKUP.md).
 
 ## Audit
 
@@ -142,20 +168,25 @@ drive the flow and bind their own mailbox to this installation.
 
 Stated plainly rather than buried:
 
-1. **Contacts are global, not per mailbox.** One person may write to several of
+1. **Running locally means the machine is the perimeter.** Full-disk encryption
+   and a locked screen are now part of the security model, since the database,
+   the attachments and every key sit on it. Docker ports are bound to
+   `127.0.0.1` so nothing is reachable from the local network, but a machine
+   someone can sit down at is a machine that holds client mail.
+2. **Contacts are global, not per mailbox.** One person may write to several of
    your mailboxes, so contacts are deliberately not cascade-deleted with one.
    That leaves personal data behind when a mailbox is removed;
    `python -m app.cli prune-contacts` reclaims contacts no message refers to.
    Client- and matter-scoped erasure in phase 2 will run this automatically.
-2. **No encryption at rest beyond the platform's own.** Cloud SQL and GCS
+3. **No encryption at rest beyond the platform's own.** Cloud SQL and GCS
    encrypt by default; message bodies are not separately encrypted, because
    full-text search requires readable text. Customer-managed keys (CMEK) are
    the right answer if the threat model requires more.
-3. **No rate limiting** on the API.
-4. **Unreferenced attachment bytes are reported, never auto-deleted.**
+4. **No rate limiting** on the API.
+5. **Unreferenced attachment bytes are reported, never auto-deleted.**
    `python -m app.cli prune-contacts` also lists stored files no message points
    at. Erasing a document is a decision for a person, not a side effect of
    housekeeping.
-5. **`raw_headers` keeps routing headers** — sender IPs and mail paths. This is
+6. **`raw_headers` keeps routing headers** — sender IPs and mail paths. This is
    deliberate for forensics but is personal data; it is covered by the same
    deletion cascade.

@@ -27,12 +27,18 @@ reliably, and prove it.
 
 ## Phase 2 — production, matters, clients
 
-*Prerequisite: the hosting decision (Cloud SQL vs Supabase).*
+*Running locally for now — cloud costs deferred until the system has earned
+them. Everything below that is not a deployment step works today on your own
+machine.*
 
 - [x] **API-key authentication**, hashed at rest, revocable, audited; forced on
       outside development
 - [x] **OAuth callback state verification** — one-time token, 15-minute life
 - [x] Orphaned-contact reclamation; unreferenced blobs reported for review
+- [x] **Encrypted backups** (AES-256-GCM) to disk or Google Drive, with
+      retention, verification, and a restore proven by test
+- [x] **Local scheduler** — sync on an interval, one backup a day, no broker
+- [x] Docker Compose stack for running the whole thing on your own machine
 - [ ] Deploy to Cloud Run; Cloud SQL or Supabase; GCS attachments; Secret Manager
 - [ ] Cloud Scheduler → `/api/v1/jobs/sync-all`
 - [ ] Gmail push via Pub/Sub, with the scheduled pull kept as the safety net
@@ -86,8 +92,8 @@ reliably, and prove it.
 
 | Decision | Needed by | Notes |
 |---|---|---|
-| Cloud SQL vs Supabase | before phase 2 deploy | Cost vs. a single processor for privileged data |
-| GCP region | before phase 2 deploy | `europe-west1` or `europe-central2` |
+| Cloud SQL vs Supabase | when moving off this machine | Cost vs. a single processor for privileged data. Deferred by choice: running locally until the system proves itself |
+| GCP region | when moving off this machine | `europe-west1` or `europe-central2` |
 | Which mailboxes and domains | before first real sync | Drives address configuration |
 | Start date for real mail | before first real sync | Hard floor; earlier backfill is deliberate |
 | Embedding provider | phase 3 | Multilingual quality vs. keeping content in fewer hands |

@@ -253,6 +253,94 @@ def cmd_stats(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backup(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from app.services.backup import (
+        BackupError,
+        create_backup,
+        list_backups,
+        prune_backups,
+        restore_archive,
+        verify_archive,
+    )
+
+    settings = get_settings()
+    with session_scope() as session:
+        try:
+            if args.action == "run":
+                artifact = create_backup(
+                    session,
+                    settings,
+                    include_attachments=args.include_attachments or None,
+                )
+                print(f"{artifact.name}  {artifact.size_bytes:,} bytes  -> {artifact.location}")
+                removed = prune_backups(session, settings)
+                if removed:
+                    print(f"pruned {len(removed)} archive(s) beyond retention")
+                return 0
+
+            if args.action == "list":
+                artifacts = list_backups(session, settings)
+                if not artifacts:
+                    print(
+                        f"No backups in {settings.backup_local_path}"
+                        if settings.backup_backend == "local"
+                        else f"No backups in Drive folder {settings.backup_gdrive_folder!r}"
+                    )
+                    return 0
+                for artifact in artifacts:
+                    kind = "db+attachments" if artifact.included_attachments else "db only"
+                    stamp = artifact.created_at.strftime("%Y-%m-%d %H:%M")
+                    print(f"{stamp}  {artifact.size_bytes:>12,} B  {kind:<15} {artifact.name}")
+                return 0
+
+            if args.action == "verify":
+                target = Path(args.path)
+                size = verify_archive(target, settings)
+                print(f"{target.name}: decrypts cleanly, {size:,} bytes of payload")
+                return 0
+
+            # restore
+            source, destination = Path(args.path), Path(args.into)
+            restore_archive(source, destination, settings)
+            print(f"Decrypted to {destination}")
+            print(
+                "\nThis is the pg_dump payload, not a restored database — "
+                "overwriting a live database is your call:\n"
+                f"  createdb email_assistant_restored\n"
+                f"  pg_restore --no-owner --dbname email_assistant_restored {destination}"
+            )
+            return 0
+        except BackupError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+
+def cmd_daemon(args: argparse.Namespace) -> int:
+    from app.services.scheduler import Scheduler
+
+    settings = get_settings()
+    scheduler = Scheduler(settings)
+    scheduler.install_signal_handlers()
+    print(
+        f"Running: sync every {settings.scheduler_sync_interval_minutes} min"
+        + (
+            f", backup daily at {settings.scheduler_backup_hour:02d}:00 {settings.timezone}"
+            if settings.backup_enabled
+            else ", backups disabled"
+        )
+        + ".  Ctrl-C to stop."
+    )
+    stats = scheduler.run_forever(max_cycles=args.max_cycles)
+    print(
+        f"\n{stats.cycles} cycle(s): {stats.syncs_run} sync(s), "
+        f"{stats.messages_created} new message(s), {stats.backups_run} backup(s), "
+        f"{stats.sync_failures + stats.backup_failures} failure(s)"
+    )
+    return 1 if stats.errors else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="app.cli", description="Email AI Assistant")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -291,6 +379,21 @@ def build_parser() -> argparse.ArgumentParser:
     prune_parser = sub.add_parser("prune-contacts", help="remove contacts no message refers to")
     prune_parser.add_argument("--dry-run", action="store_true")
     prune_parser.set_defaults(func=cmd_prune_contacts)
+
+    backup_parser = sub.add_parser("backup", help="encrypted backups")
+    backup_parser.add_argument("action", choices=["run", "list", "verify", "restore"])
+    backup_parser.add_argument("path", nargs="?", default="", help="archive path")
+    backup_parser.add_argument(
+        "--into", default="./restored.dump", help="where to write a restored dump"
+    )
+    backup_parser.add_argument("--include-attachments", action="store_true")
+    backup_parser.set_defaults(func=cmd_backup)
+
+    daemon_parser = sub.add_parser("daemon", help="run sync (and backups) on a schedule, locally")
+    daemon_parser.add_argument(
+        "--max-cycles", type=int, default=None, help="stop after N cycles (testing)"
+    )
+    daemon_parser.set_defaults(func=cmd_daemon)
     return parser
 
 
