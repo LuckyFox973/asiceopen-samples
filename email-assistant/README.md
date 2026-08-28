@@ -87,6 +87,7 @@ python -m app.cli sync you@example.com --mode initial
 python -m app.cli search "kasačná sťažnosť"
 python -m app.cli stats
 
+python -m app.cli import-credentials          # reads Google's downloaded JSON
 python -m app.cli api-key create mcp-server   # shown once, stored hashed
 python -m app.cli api-key list
 python -m app.cli prune-contacts              # reclaim orphaned personal data

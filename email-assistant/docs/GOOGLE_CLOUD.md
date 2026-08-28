@@ -86,8 +86,15 @@ http://127.0.0.1:8000/api/v1/auth/google/callback
 Both entries, because browsers and command-line tools disagree about which one
 they send — a mismatch here is the most common failure in the whole process.
 
-**Create**. Copy the **Client ID** and **Client secret**. That is the Google
-side finished.
+**Create**. A panel offers a JSON download — take it. That file holds both the
+client id and the secret, and the application can read it directly:
+
+```bash
+./.venv/bin/python -m app.cli import-credentials
+```
+
+Copying the two values by hand works too. Either way, that is the Google side
+finished.
 
 ---
 

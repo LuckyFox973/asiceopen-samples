@@ -36,17 +36,29 @@ That searches *inside* a PDF in the demo data. A result means everything works.
 
 ## 3. Add your Google credentials
 
+Google gives you the OAuth client as a downloaded `client_secret*.json` rather
+than something you can paste. This reads it for you:
+
 ```bash
 cd ~/email-assistant/email-assistant
+./.venv/bin/python -m app.cli import-credentials
+```
+
+It finds the newest download in `~/Downloads` (pass a path if it is elsewhere),
+writes the client id and secret into `.env`, makes that file readable only by
+you, and **checks the redirect URIs against what the application uses** — which
+is what turns a baffling `redirect_uri_mismatch` during authorisation into a
+sentence beforehand. The secret is never printed.
+
+Delete the download afterwards; it still holds your client secret.
+
+Then open `.env` and set the rest to match what you configured in Google:
+
+```bash
 open -e .env
 ```
 
-Fill in the two values from GOOGLE_CLOUD.md step 5, and set the permissions to
-match what you configured there:
-
 ```
-GOOGLE_CLIENT_ID=1234567890-abcdefg.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=GOCSPX-...
 GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
 
 GMAIL_WRITE_ENABLED=true

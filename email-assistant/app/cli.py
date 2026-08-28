@@ -697,6 +697,60 @@ def cmd_action(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_import_credentials(args: argparse.Namespace) -> int:
+    """Read the OAuth client file Google gave you and fill in .env."""
+    from pathlib import Path
+
+    from app.services.credentials import (
+        CredentialsError,
+        check_redirect_uris,
+        find_download,
+        parse,
+        write_env,
+    )
+
+    settings = get_settings()
+    try:
+        path = find_download(args.path or None)
+        client = parse(path)
+    except CredentialsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Found {path.name}")
+    print(f"  client id : {client.masked_id}")
+    print(f"  type      : {client.kind}")
+    if client.project_id:
+        print(f"  project   : {client.project_id}")
+
+    problems = check_redirect_uris(client, settings.google_oauth_redirect_uri)
+
+    env_path = Path(args.env or ".env")
+    changed = write_env(
+        env_path,
+        {
+            "GOOGLE_CLIENT_ID": client.client_id,
+            "GOOGLE_CLIENT_SECRET": client.client_secret,
+        },
+        template=Path(".env.example"),
+    )
+    if changed:
+        print(f"\nWrote {', '.join(changed)} to {env_path} (now readable only by you).")
+    else:
+        print(f"\n{env_path} already had these values.")
+
+    if problems:
+        print("\nFix before authorising:")
+        for problem in problems:
+            print(f"  ! {problem}")
+        return 1
+
+    print("\nRedirect URIs look right.")
+    print(f"\nThe downloaded file still holds your client secret. Delete it:\n  rm {path}")
+    print("\nNext:  python -m app.cli check")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="app.cli", description="Email AI Assistant")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -814,6 +868,16 @@ def build_parser() -> argparse.ArgumentParser:
     action_parser.add_argument("--body", default="")
     action_parser.add_argument("--thread-id", default="", help="Gmail thread to reply in")
     action_parser.set_defaults(func=cmd_action)
+
+    creds_parser = sub.add_parser(
+        "import-credentials",
+        help="read Google's downloaded client_secret*.json into .env",
+    )
+    creds_parser.add_argument(
+        "path", nargs="?", default="", help="path to the JSON (default: newest download)"
+    )
+    creds_parser.add_argument("--env", default="", help="which .env to write (default: ./.env)")
+    creds_parser.set_defaults(func=cmd_import_credentials)
     return parser
 
 
