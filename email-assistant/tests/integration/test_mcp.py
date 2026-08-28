@@ -167,11 +167,31 @@ class TestToolSurface:
             "recent_actions",
         } <= names
 
-    def test_no_tool_can_send_or_delete_mail(self):
-        """The surface matches the read-only Gmail scopes."""
+    def test_nothing_sends_mail(self):
+        """Sending is not exposed at all: it needs a deliberate, separate step."""
         names = {t.name for t in asyncio.run(mcp_module.server.list_tools())}
-        for forbidden in ("send", "delete", "trash", "archive", "reply", "draft"):
-            assert not any(forbidden in name for name in names)
+        assert not any(name.startswith("send") for name in names)
+
+    def test_destructive_tools_are_in_the_approval_tier(self):
+        """Binning and permanent deletion must never run on the model's say-so."""
+        from app.db.models import ActionType, RiskTier
+        from app.services.actions import risk_tier
+
+        names = {t.name for t in asyncio.run(mcp_module.server.list_tools())}
+        assert {"request_trash", "request_permanent_delete"} <= names
+        for action in (ActionType.TRASH, ActionType.DELETE_PERMANENT, ActionType.SEND):
+            assert risk_tier(action) is RiskTier.APPROVAL
+
+    def test_destructive_tools_say_they_wait(self):
+        """The description is what the model reads before choosing a tool."""
+        tools = {t.name: t.description or "" for t in asyncio.run(mcp_module.server.list_tools())}
+        assert "waits" in tools["request_trash"].lower()
+        assert "undoes this" in tools["request_permanent_delete"].lower()
+
+    def test_write_tools_refuse_when_write_access_is_off(self, populated):
+        """Read-only scopes mean the action cannot happen even if proposed."""
+        output = call("request_trash", gmail_message_id="m1")
+        assert "without write permission" in output or "read-only" in output
 
 
 class TestMailTools:

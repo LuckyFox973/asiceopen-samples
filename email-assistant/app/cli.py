@@ -63,7 +63,22 @@ def cmd_check(_args: argparse.Namespace) -> int:
     print(f"database    : {settings.database_url.split('@')[-1]}")
     print(f"start date  : {settings.sync_start_date}")
     print(f"attachments : {settings.attachment_backend}")
-    print(f"scopes      : {', '.join(settings.gmail_scopes)}")
+    print(f"backups     : {settings.backup_backend if settings.backup_enabled else 'off'}")
+
+    print("\nMailbox permissions:")
+    print(f"  write actions     : {'yes' if settings.gmail_write_enabled else 'no (read-only)'}")
+    print(f"  archive w/o asking: {'yes' if settings.gmail_auto_archive else 'no'}")
+    print(
+        f"  permanent delete  : "
+        f"{'ENABLED — irreversible' if settings.gmail_allow_permanent_delete else 'no (bin only)'}"
+    )
+
+    # Printed one per line so they can be pasted straight into the Google
+    # consent screen, which is where a mismatch costs a re-authorisation.
+    print("\nOAuth scopes this application will request:")
+    for scope in settings.gmail_scopes:
+        print(f"  {scope}")
+    print("These must match the consent screen exactly — see docs/GOOGLE_SETUP.md.")
 
     problems = verify_configuration(settings)
     if problems:
@@ -574,6 +589,114 @@ def cmd_versions(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_action(args: argparse.Namespace) -> int:
+    """Review and decide what the assistant wants to do to the mailbox."""
+    from app.db.models import ActionType, PendingAction
+    from app.services.actions import (
+        ActionError,
+        ActionRequest,
+        approve,
+        describe_target,
+        execute,
+        history,
+        pending,
+        propose_and_maybe_execute,
+        reject,
+        risk_tier,
+    )
+    from app.services.runner import build_actions
+
+    settings = get_settings()
+    with session_scope() as session:
+        if args.action in {"list", "history"}:
+            items = pending(session) if args.action == "list" else history(session)
+            if not items:
+                print("Nothing waiting." if args.action == "list" else "No actions yet.")
+                return 0
+            for item in items:
+                print(
+                    f"{item.created_at:%Y-%m-%d %H:%M}  {item.action_type:<18}"
+                    f"{item.status:<10}[{item.risk_tier}]"
+                )
+                print(f"    {item.description}")
+                print(f"    target: {describe_target(session, item)}")
+                if item.reason:
+                    print(f"    reason: {item.reason}")
+                if item.error:
+                    print(f"    error : {item.error[:160]}")
+                print(f"    id={item.id}")
+            if args.action == "list":
+                print("\nApprove: python -m app.cli action approve <id>")
+                print("Reject : python -m app.cli action reject <id>")
+            return 0
+
+        if args.action in {"approve", "reject"}:
+            if not args.action_id:
+                print("Give an action id.", file=sys.stderr)
+                return 1
+            try:
+                target = uuid.UUID(args.action_id)
+                if args.action == "reject":
+                    reject(session, target, note=args.note)
+                    print("Rejected. Nothing was changed in the mailbox.")
+                    return 0
+
+                item = approve(session, target)
+                gmail = build_actions(session, session.get(MailboxAccount, item.account_id))
+                done = execute(session, item, gmail, settings)
+                if done.status == "executed":
+                    print(f"Done: {done.description}")
+                    if done.undo_hint:
+                        print(f"Undo: {done.undo_hint}")
+                else:
+                    print(f"Failed: {done.error}", file=sys.stderr)
+                    return 1
+            except (ActionError, PermissionError, ValueError) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            return 0
+
+        # `action draft` — the one proposal worth having a shortcut for.
+        account = _resolve_account(session, args.account) if args.account else None
+        if account is None:
+            accounts = list_accounts(session, active_only=True)
+            if not accounts:
+                print("No connected mailbox.", file=sys.stderr)
+                return 1
+            account = accounts[0]
+
+        try:
+            gmail = build_actions(session, account, settings)
+        except PermissionError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+        item = propose_and_maybe_execute(
+            session,
+            account,
+            ActionRequest(
+                action_type=ActionType.DRAFT_CREATE,
+                description=f"Draft a reply to {args.to}",
+                gmail_target_id=None,
+                payload={
+                    "to": [a.strip() for a in args.to.split(",") if a.strip()],
+                    "subject": args.subject,
+                    "body": args.body,
+                    "thread_id": args.thread_id or None,
+                },
+                requested_by="user",
+            ),
+            gmail=gmail,
+            settings=settings,
+        )
+        tier = risk_tier(ActionType.DRAFT_CREATE).value
+        print(f"{item.status} [{tier}] — {item.description}")
+        if item.result:
+            print(f"    {item.result}")
+        assert isinstance(item, PendingAction)
+        return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="app.cli", description="Email AI Assistant")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -680,6 +803,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     versions_parser.add_argument("--limit", type=int, default=50)
     versions_parser.set_defaults(func=cmd_versions)
+
+    action_parser = sub.add_parser("action", help="review and decide Gmail actions")
+    action_parser.add_argument("action", choices=["list", "history", "approve", "reject", "draft"])
+    action_parser.add_argument("action_id", nargs="?", default="")
+    action_parser.add_argument("--note", help="why it was rejected")
+    action_parser.add_argument("--account", help="mailbox e-mail or id")
+    action_parser.add_argument("--to", default="", help="recipients, comma separated")
+    action_parser.add_argument("--subject", default="")
+    action_parser.add_argument("--body", default="")
+    action_parser.add_argument("--thread-id", default="", help="Gmail thread to reply in")
+    action_parser.set_defaults(func=cmd_action)
     return parser
 
 

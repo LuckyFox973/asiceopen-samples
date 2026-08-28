@@ -17,19 +17,35 @@ AppEnv = Literal["development", "staging", "production"]
 AttachmentBackend = Literal["local", "gcs"]
 BackupBackend = Literal["local", "gdrive"]
 
-# Minimum Gmail scopes for MVP 1.  Read-only: the assistant cannot send,
-# delete or modify anything.  Write scopes are added deliberately in a later
-# phase, together with the approval workflow (see docs/SECURITY.md).
-GMAIL_SCOPES_READONLY: tuple[str, ...] = (
-    "https://www.googleapis.com/auth/gmail.readonly",
+# Exactly one mail scope is requested, chosen by what is enabled — see
+# Settings.gmail_scopes.  These three always accompany it.
+GMAIL_SCOPES_COMMON: tuple[str, ...] = (
     "https://www.googleapis.com/auth/gmail.settings.basic",  # send-as aliases
     "https://www.googleapis.com/auth/userinfo.email",
     "openid",
 )
 
+# Read only: the assistant is not merely restrained from changing the mailbox,
+# it is not authorised to.
+GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+
+# Kept for tests and for anything that still refers to the read-only set.
+GMAIL_SCOPES_READONLY: tuple[str, ...] = (GMAIL_READONLY_SCOPE, *GMAIL_SCOPES_COMMON)
+
 # Added only when Drive backups are enabled.  Grants access to files this
 # application creates and to nothing else in the user's Drive.
 DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+
+# Labels, archive, trash/untrash, drafts, send.  Everything the assistant needs
+# to act on a mailbox — except bypassing the trash.
+GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+
+# The restricted scope, and the only one that permanently deletes.  Requested
+# solely when permanent deletion is explicitly enabled: with gmail.modify a
+# "delete" is a move to trash, which Google keeps for 30 days and which
+# untrash reverses.  Holding an irreversible-delete token for a mailbox of
+# privileged correspondence is a real risk, so it is never the default.
+GMAIL_FULL_SCOPE = "https://mail.google.com/"
 
 
 class Settings(BaseSettings):
@@ -70,6 +86,19 @@ class Settings(BaseSettings):
     attachment_local_path: str = "./data/attachments"
     attachment_gcs_bucket: str = ""
     attachment_max_bytes: int = 25 * 1024 * 1024
+
+    # --- Gmail actions -------------------------------------------------------
+    # Off by default: without it the OAuth grant carries no write permission at
+    # all, so the assistant is not merely restrained from changing the mailbox
+    # — it is not authorised to.
+    gmail_write_enabled: bool = False
+    # Bypassing the trash is irreversible.  Separate switch, separate scope,
+    # and Google treats it as a restricted scope with stricter review.
+    gmail_allow_permanent_delete: bool = False
+    # Archive without asking, once you trust it.  Everything riskier always asks.
+    gmail_auto_archive: bool = False
+    # Labels the assistant may create and apply on its own.
+    gmail_managed_label_prefix: str = "AI"
 
     # --- Backups -----------------------------------------------------------
     backup_enabled: bool = False
@@ -129,7 +158,18 @@ class Settings(BaseSettings):
         it is ``drive.file`` — access limited to files this application itself
         creates, never the rest of the Drive.
         """
-        scopes = list(GMAIL_SCOPES_READONLY)
+        # Only the narrowest scope that covers what is enabled: gmail.modify
+        # already grants read, and mail.google.com already grants both, so
+        # requesting them together would ask the user to approve more than the
+        # application can actually use.
+        if self.gmail_allow_permanent_delete:
+            mail_scope = GMAIL_FULL_SCOPE
+        elif self.gmail_write_enabled:
+            mail_scope = GMAIL_MODIFY_SCOPE
+        else:
+            mail_scope = GMAIL_READONLY_SCOPE
+
+        scopes = [mail_scope, *GMAIL_SCOPES_COMMON]
         if self.backup_enabled and self.backup_backend == "gdrive":
             scopes.append(DRIVE_FILE_SCOPE)
         return scopes

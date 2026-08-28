@@ -9,10 +9,11 @@ from __future__ import annotations
 from google.oauth2.credentials import Credentials
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings
+from app.core.config import GMAIL_FULL_SCOPE, GMAIL_MODIFY_SCOPE, Settings, get_settings
 from app.core.crypto import get_cipher
 from app.core.logging import get_logger
 from app.db.models import MailboxAccount, SyncRun
+from app.gmail.actions import GmailActions
 from app.gmail.client import GmailClient
 from app.gmail.oauth import credentials_from_stored, refresh_if_needed
 from app.services.accounts import refresh_send_as_addresses
@@ -50,6 +51,28 @@ def build_client(
 ) -> GmailClient:
     """Build an authenticated Gmail client, refreshing the token if needed."""
     return GmailClient(build_credentials(session, account, settings))
+
+
+def build_actions(
+    session: Session, account: MailboxAccount, settings: Settings | None = None
+) -> GmailActions:
+    """Write operations for one mailbox.
+
+    Fails loudly when the stored grant carries no write scope, rather than
+    letting Gmail refuse each call with an opaque 403 later.
+    """
+    from googleapiclient.discovery import build as build_service
+
+    settings = settings or get_settings()
+    scopes = account.oauth_scopes or []
+    if not any(s in scopes for s in (GMAIL_MODIFY_SCOPE, GMAIL_FULL_SCOPE)):
+        raise PermissionError(
+            f"Mailbox {account.email} was authorised without write permission. "
+            "Set GMAIL_WRITE_ENABLED=true and re-run 'python -m app.cli auth-url'."
+        )
+    credentials = build_credentials(session, account, settings)
+    service = build_service("gmail", "v1", credentials=credentials, cache_discovery=False)
+    return GmailActions(service)
 
 
 def run_sync(

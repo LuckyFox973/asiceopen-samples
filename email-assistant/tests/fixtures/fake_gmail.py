@@ -97,3 +97,104 @@ class FakeGmailClient:
             raise HistoryTooOldError(f"historyId {start_history_id} expired")
         records = [h for h in self.history if int(h["id"]) > start_history_id]
         return records, None, self.profile_history_id
+
+
+class FakeGmailActions:
+    """Records write operations instead of performing them.
+
+    Every method mirrors :class:`app.gmail.actions.GmailActions`, so the action
+    engine runs unchanged and the test can assert exactly which calls a policy
+    decision produced — including that a refused action produced none.
+    """
+
+    def __init__(self, fail_on: set[str] | None = None) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self.labels: dict[str, str] = {}
+        self.fail_on = fail_on or set()
+        self._next_id = 0
+
+    def _record(self, call: str, **kwargs):
+        if call in self.fail_on:
+            raise RuntimeError(f"simulated Gmail failure in {call}")
+        self.calls.append((call, kwargs))
+
+    def called(self, name: str) -> bool:
+        return any(call == name for call, _ in self.calls)
+
+    def call_count(self, name: str) -> int:
+        return sum(1 for call, _ in self.calls if call == name)
+
+    def last(self, name: str) -> dict:
+        for call, kwargs in reversed(self.calls):
+            if call == name:
+                return kwargs
+        raise AssertionError(f"{name} was never called")
+
+    # --- mirrored surface ---------------------------------------------------
+
+    def list_labels(self):
+        return [{"id": v, "name": k} for k, v in self.labels.items()]
+
+    def ensure_label(self, name: str) -> str:
+        from app.gmail.actions import SYSTEM_LABELS, UnsafeLabelError
+
+        if name.upper() in SYSTEM_LABELS:
+            raise UnsafeLabelError(f"{name} is a Gmail system label.")
+        self._record("ensure_label", name=name)
+        return self.labels.setdefault(name, f"Label_{len(self.labels) + 1}")
+
+    def modify_labels(self, message_id, add=None, remove=None, allow_system=False):
+        from app.gmail.actions import ActionOutcome, assert_safe_labels
+
+        if not allow_system:
+            assert_safe_labels((add or []) + (remove or []))
+        self._record("modify_labels", message_id=message_id, add=add, remove=remove)
+        return ActionOutcome(ok=True, detail="labels changed", data={"labelIds": add or []})
+
+    def archive(self, message_id):
+        from app.gmail.actions import ActionOutcome
+
+        self._record("archive", message_id=message_id)
+        return ActionOutcome(ok=True, detail=f"archived {message_id}",
+                             undo_hint=f"unarchive({message_id})")
+
+    def unarchive(self, message_id):
+        from app.gmail.actions import ActionOutcome
+
+        self._record("unarchive", message_id=message_id)
+        return ActionOutcome(ok=True, detail=f"unarchived {message_id}")
+
+    def trash(self, message_id):
+        from app.gmail.actions import ActionOutcome
+
+        self._record("trash", message_id=message_id)
+        return ActionOutcome(ok=True, detail=f"trashed {message_id}",
+                             undo_hint=f"untrash({message_id})")
+
+    def untrash(self, message_id):
+        from app.gmail.actions import ActionOutcome
+
+        self._record("untrash", message_id=message_id)
+        return ActionOutcome(ok=True, detail=f"untrashed {message_id}")
+
+    def delete_permanently(self, message_id):
+        from app.gmail.actions import ActionOutcome
+
+        self._record("delete_permanently", message_id=message_id)
+        return ActionOutcome(ok=True, detail=f"deleted {message_id}", undo_hint=None)
+
+    def create_draft(self, to, subject, body, thread_id=None, in_reply_to=None,
+                     cc=None, from_address=None):
+        from app.gmail.actions import ActionOutcome
+
+        self._next_id += 1
+        self._record("create_draft", to=to, subject=subject, body=body,
+                     thread_id=thread_id, in_reply_to=in_reply_to)
+        return ActionOutcome(ok=True, detail=f"draft for {', '.join(to)}",
+                             data={"draftId": f"draft-{self._next_id}"})
+
+    def send_draft(self, draft_id):
+        from app.gmail.actions import ActionOutcome
+
+        self._record("send_draft", draft_id=draft_id)
+        return ActionOutcome(ok=True, detail=f"sent {draft_id}", data={"messageId": "sent-1"})

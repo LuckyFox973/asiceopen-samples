@@ -79,12 +79,14 @@ machine.*
 - [ ] Daily briefing, 08:00 Europe/Bratislava on working days:
       needs your reaction / waiting on the other side / follow-ups due today /
       new important documents / no action needed
-- [ ] `pending_action` approval workflow
-- [ ] Gmail write scopes and actions, by risk tier:
-      - automatic: safe labels, drafts, internal tasks and memory
-      - configurable: archive
-      - always requires your approval: send, delete, permanent delete, any
-        material modification of existing correspondence
+- [x] **`pending_action` approval workflow** — every action proposed, decided
+      and audited; proposals expire after 7 days
+- [x] **Gmail write actions by risk tier** — automatic (labels, drafts,
+      unarchive, restore), configurable (archive), approval (bin, permanent
+      delete, send). No setting promotes an action out of the approval tier
+- [x] System-label guard, so "apply a label" can never become an unaudited bin
+- [ ] Sending: the action type exists in the approval tier, but no tool creates
+      one yet
 
 ## Phase 5 — access from Claude
 

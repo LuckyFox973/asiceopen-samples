@@ -19,8 +19,10 @@ from datetime import UTC, datetime, timedelta
 from mcp.server.mcpserver import MCPServer
 from sqlalchemy import func, select
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.models import (
+    ActionType,
     Attachment,
     AuditLog,
     Client,
@@ -180,11 +182,7 @@ def get_thread(thread_id: str, max_messages: int = 30) -> str:
             session.scalars(
                 select(EmailMessage)
                 .where(EmailMessage.thread_id == thread.id)
-                .order_by(
-                    func.coalesce(
-                        EmailMessage.internal_date, EmailMessage.sent_at
-                    ).asc()
-                )
+                .order_by(func.coalesce(EmailMessage.internal_date, EmailMessage.sent_at).asc())
                 .limit(max(1, min(max_messages, 100)))
             ).all()
         )
@@ -220,7 +218,7 @@ def get_thread(thread_id: str, max_messages: int = 30) -> str:
         "Find conversations by subject or by the content of their messages. "
         "Cheaper than search_emails when you want the conversation, not the "
         "individual message."
-    )
+    ),
 )
 @readable_errors
 def search_threads_tool(query: str = "", limit: int = 15) -> str:
@@ -252,7 +250,7 @@ def search_threads_tool(query: str = "", limit: int = 15) -> str:
         "than in e-mail bodies. Use this when the answer is likely in a "
         "document: 'where did the tax authority claim the CMR notes were "
         "duplicates?'. Returns the matching passage."
-    )
+    ),
 )
 @readable_errors
 def search_documents_tool(query: str, limit: int = 10) -> str:
@@ -299,11 +297,7 @@ def get_attachment_text(attachment_id: str, max_chars: int = 12000) -> str:
             return (
                 f"Status: {document.status}."
                 + (f" {document.error}" if document.error else "")
-                + (
-                    " This is a scan; OCR is not enabled."
-                    if document.status == "needs_ocr"
-                    else ""
-                )
+                + (" This is a scan; OCR is not enabled." if document.status == "needs_ocr" else "")
             )
 
         parts = [f"[{document.method}, {document.char_count:,} characters]"]
@@ -314,8 +308,7 @@ def get_attachment_text(attachment_id: str, max_chars: int = 12000) -> str:
             parts.append(f"\nComments:\n{clip(document.comment_text, 2000)}")
         if document.deleted_text:
             parts.append(
-                f"\nRemoved by revision (NOT current text):\n"
-                f"{clip(document.deleted_text, 2000)}"
+                f"\nRemoved by revision (NOT current text):\n{clip(document.deleted_text, 2000)}"
             )
         return "\n".join(parts)
 
@@ -361,9 +354,7 @@ def document_versions(attachment_id: str) -> str:
         return "\n".join(lines)
 
 
-@server.tool(
-    description="Compare the extracted text of two documents and report what changed."
-)
+@server.tool(description="Compare the extracted text of two documents and report what changed.")
 @readable_errors
 def diff_documents(older_attachment_id: str, newer_attachment_id: str) -> str:
     """Diff two documents."""
@@ -393,17 +384,13 @@ def diff_documents(older_attachment_id: str, newer_attachment_id: str) -> str:
 def list_clients(limit: int = 50) -> str:
     """Who we act for, and what is open."""
     with session_scope() as session:
-        clients = session.scalars(
-            select(Client).order_by(Client.display_name).limit(limit)
-        ).all()
+        clients = session.scalars(select(Client).order_by(Client.display_name).limit(limit)).all()
         if not clients:
             return empty("clients")
 
         lines = []
         for client in clients:
-            matters = session.scalars(
-                select(Matter).where(Matter.client_id == client.id)
-            ).all()
+            matters = session.scalars(select(Matter).where(Matter.client_id == client.id)).all()
             lines.append(
                 f"{client.display_name}"
                 + (f" [{client.reference}]" if client.reference else "")
@@ -438,8 +425,7 @@ def get_matter(matter_id: str, limit: int = 15) -> str:
             f"{client.display_name if client else '?'} / {matter.title}"
             + (f" [{matter.reference}]" if matter.reference else ""),
             f"Status: {matter.status}. Opened {matter.opened_on or '?'}.",
-            f"Filed: {counts['thread']} thread(s), "
-            f"{counts['messages_in_threads']} message(s).",
+            f"Filed: {counts['thread']} thread(s), {counts['messages_in_threads']} message(s).",
         ]
         if matter.description:
             lines.append(f"\n{matter.description}")
@@ -565,28 +551,18 @@ def sync_status() -> str:
 
         lines = []
         for account in accounts:
-            state = session.scalar(
-                select(SyncState).where(SyncState.account_id == account.id)
-            )
+            state = session.scalar(select(SyncState).where(SyncState.account_id == account.id))
             messages = session.scalar(
-                select(func.count(EmailMessage.id)).where(
-                    EmailMessage.account_id == account.id
-                )
+                select(func.count(EmailMessage.id)).where(EmailMessage.account_id == account.id)
             )
             threads = session.scalar(
-                select(func.count(EmailThread.id)).where(
-                    EmailThread.account_id == account.id
-                )
+                select(func.count(EmailThread.id)).where(EmailThread.account_id == account.id)
             )
             attachments = session.scalar(
-                select(func.count(Attachment.id)).where(
-                    Attachment.account_id == account.id
-                )
+                select(func.count(Attachment.id)).where(Attachment.account_id == account.id)
             )
             extracted = session.scalar(
-                select(func.count(DocumentText.id)).where(
-                    DocumentText.status == "extracted"
-                )
+                select(func.count(DocumentText.id)).where(DocumentText.status == "extracted")
             )
             lines.append(
                 f"{account.email}\n"
@@ -645,9 +621,7 @@ def recent_actions(limit: int = 20) -> str:
     """What the system has been doing."""
     with session_scope() as session:
         entries = session.scalars(
-            select(AuditLog)
-            .order_by(AuditLog.occurred_at.desc())
-            .limit(max(1, min(limit, 100)))
+            select(AuditLog).order_by(AuditLog.occurred_at.desc()).limit(max(1, min(limit, 100)))
         ).all()
         if not entries:
             return empty("audit entries")
@@ -656,6 +630,278 @@ def recent_actions(limit: int = 20) -> str:
             f"[{'auto' if entry.automatic else 'manual'}]\n  {entry.summary or ''}"
             for entry in entries
         )
+
+
+# ---------------------------------------------------------------------------
+# Acting on the mailbox
+# ---------------------------------------------------------------------------
+#
+# Safe, reversible actions run straight away.  Everything destructive returns
+# an id and waits: the model proposes, a person decides.  That is the rule the
+# brief set, and no configuration moves an action out of the approval tier.
+
+
+def _act(
+    action_type: ActionType,
+    description: str,
+    gmail_target_id: str | None = None,
+    payload: dict | None = None,
+    reason: str | None = None,
+    target_id: uuid.UUID | None = None,
+    target_type: str = "message",
+) -> str:
+    from app.services.actions import (
+        ActionError,
+        ActionRequest,
+        propose_and_maybe_execute,
+        risk_tier,
+    )
+    from app.services.runner import build_actions
+
+    settings = get_settings()
+    with session_scope() as session:
+        accounts = list_accounts(session, active_only=True)
+        if not accounts:
+            return "No connected mailbox."
+        account = accounts[0]
+
+        try:
+            gmail = build_actions(session, account, settings)
+        except PermissionError as exc:
+            return str(exc)
+
+        try:
+            action = propose_and_maybe_execute(
+                session,
+                account,
+                ActionRequest(
+                    action_type=action_type,
+                    description=description,
+                    target_type=target_type,
+                    target_id=target_id,
+                    gmail_target_id=gmail_target_id,
+                    payload=payload,
+                    reason=reason,
+                ),
+                gmail=gmail,
+                settings=settings,
+            )
+        except ActionError as exc:
+            return str(exc)
+
+        if action.status == "executed":
+            undo = f"\nUndo: {action.undo_hint}" if action.undo_hint else ""
+            return f"Done — {action.description}.{undo}"
+        if action.status == "failed":
+            return f"Failed — {action.error}"
+        return (
+            f"Waiting for approval [{risk_tier(action_type).value}] — "
+            f"{action.description}\n"
+            f"Nothing has changed in the mailbox yet. Approve with "
+            f"approve_action(action_id='{action.id}'), or the user can run "
+            f"`python -m app.cli action approve {action.id}`."
+        )
+
+
+@server.tool(
+    description=(
+        "Apply one of the assistant's own labels to a message. Safe and "
+        "reversible, so it happens immediately. Gmail's system labels (INBOX, "
+        "TRASH, SPAM…) are refused here — archiving and binning have their own "
+        "tools with their own safeguards."
+    )
+)
+@readable_errors
+def apply_label(gmail_message_id: str, label: str, reason: str = "") -> str:
+    """Tag a message."""
+    return _act(
+        ActionType.LABEL_ADD,
+        description=f"Apply label {label!r} to {gmail_message_id}",
+        gmail_target_id=gmail_message_id,
+        payload={"labels": [label]},
+        reason=reason or None,
+    )
+
+
+@server.tool(
+    description=(
+        "Write a draft reply. Drafts send nothing — the text waits in Gmail "
+        "for the user to read, edit and send. Pass gmail_thread_id and "
+        "in_reply_to so it threads correctly."
+    )
+)
+@readable_errors
+def draft_reply(
+    to: str,
+    subject: str,
+    body: str,
+    gmail_thread_id: str = "",
+    in_reply_to: str = "",
+    cc: str = "",
+    reason: str = "",
+) -> str:
+    """Prepare a reply for the user to review."""
+    from app.db.models import ActionType
+
+    recipients = [a.strip() for a in to.split(",") if a.strip()]
+    if not recipients:
+        raise ToolInputError("At least one recipient is required.")
+
+    return _act(
+        ActionType.DRAFT_CREATE,
+        description=f"Draft to {', '.join(recipients)}: {subject or '(no subject)'}",
+        payload={
+            "to": recipients,
+            "cc": [a.strip() for a in cc.split(",") if a.strip()] or None,
+            "subject": subject,
+            "body": body,
+            "thread_id": gmail_thread_id or None,
+            "in_reply_to": in_reply_to or None,
+        },
+        reason=reason or None,
+    )
+
+
+@server.tool(
+    description=(
+        "Archive a message: remove it from the inbox. It stays in All Mail and "
+        "stays searchable, and unarchive puts it back. Runs immediately only if "
+        "the user enabled automatic archiving; otherwise it waits for approval."
+    )
+)
+@readable_errors
+def archive_message(gmail_message_id: str, reason: str = "") -> str:
+    """Take a message out of the inbox."""
+    return _act(
+        ActionType.ARCHIVE,
+        description=f"Archive {gmail_message_id}",
+        gmail_target_id=gmail_message_id,
+        reason=reason or None,
+    )
+
+
+@server.tool(description="Put an archived message back in the inbox. Always safe.")
+@readable_errors
+def unarchive_message(gmail_message_id: str) -> str:
+    """Restore a message to the inbox."""
+    return _act(
+        ActionType.UNARCHIVE,
+        description=f"Move {gmail_message_id} back to the inbox",
+        gmail_target_id=gmail_message_id,
+    )
+
+
+@server.tool(
+    description=(
+        "Propose moving a message to the bin. Never happens on its own — it "
+        "returns an id and waits for the user to approve. Gmail keeps binned "
+        "mail about 30 days, and restore_message reverses it."
+    )
+)
+@readable_errors
+def request_trash(gmail_message_id: str, reason: str = "") -> str:
+    """Ask to bin a message."""
+    return _act(
+        ActionType.TRASH,
+        description=f"Move {gmail_message_id} to the bin",
+        gmail_target_id=gmail_message_id,
+        reason=reason or None,
+    )
+
+
+@server.tool(description="Take a message back out of the bin. Always safe.")
+@readable_errors
+def restore_message(gmail_message_id: str) -> str:
+    """Undo a binning."""
+    return _act(
+        ActionType.UNTRASH,
+        description=f"Restore {gmail_message_id} from the bin",
+        gmail_target_id=gmail_message_id,
+    )
+
+
+@server.tool(
+    description=(
+        "Propose permanently deleting a message, bypassing the bin. Nothing "
+        "undoes this. Requires approval, and requires the user to have enabled "
+        "permanent deletion — moving to the bin is almost always what is "
+        "wanted instead."
+    )
+)
+@readable_errors
+def request_permanent_delete(gmail_message_id: str, reason: str = "") -> str:
+    """Ask to delete a message irreversibly."""
+    return _act(
+        ActionType.DELETE_PERMANENT,
+        description=f"PERMANENTLY delete {gmail_message_id} — cannot be undone",
+        gmail_target_id=gmail_message_id,
+        reason=reason or None,
+    )
+
+
+@server.tool(
+    description=(
+        "Actions waiting for the user's decision, with what each would do and why it was proposed."
+    )
+)
+@readable_errors
+def pending_actions(limit: int = 20) -> str:
+    """What is waiting to be approved."""
+    from app.services.actions import describe_target, pending
+
+    with session_scope() as session:
+        items = pending(session, limit)
+        if not items:
+            return "Nothing waiting for approval."
+        return "\n".join(
+            f"{item.action_type} [{item.risk_tier}]  {item.description}\n"
+            f"  target: {describe_target(session, item)}\n"
+            f"  reason: {item.reason or '-'}\n"
+            f"  id={item.id}"
+            for item in items
+        )
+
+
+@server.tool(
+    description=(
+        "Approve a waiting action and carry it out. Only call this when the "
+        "user has said yes to this specific action — approval is theirs to "
+        "give, not yours to infer."
+    )
+)
+@readable_errors
+def approve_action(action_id: str) -> str:
+    """Execute an action the user approved."""
+    from app.db.models import MailboxAccount
+    from app.services.actions import ActionError, approve, execute
+    from app.services.runner import build_actions
+
+    with session_scope() as session:
+        try:
+            action = approve(session, _parse_uuid(action_id, "action_id"))
+            account = session.get(MailboxAccount, action.account_id)
+            done = execute(session, action, build_actions(session, account), get_settings())
+        except (ActionError, PermissionError) as exc:
+            return str(exc)
+
+        if done.status == "executed":
+            undo = f"\nUndo: {done.undo_hint}" if done.undo_hint else ""
+            return f"Done — {done.description}.{undo}"
+        return f"Failed — {done.error}"
+
+
+@server.tool(description="Reject a waiting action. Nothing is changed in the mailbox.")
+@readable_errors
+def reject_action(action_id: str, note: str = "") -> str:
+    """Decline a proposed action."""
+    from app.services.actions import ActionError, reject
+
+    with session_scope() as session:
+        try:
+            reject(session, _parse_uuid(action_id, "action_id"), note=note or None)
+        except ActionError as exc:
+            return str(exc)
+        return "Rejected. Nothing was changed in the mailbox."
 
 
 def _date(value: str) -> datetime | None:

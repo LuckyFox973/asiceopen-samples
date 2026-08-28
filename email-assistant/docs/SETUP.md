@@ -35,6 +35,11 @@ ingest, attachment store and search index are the production ones.
 
 ## 2. Google Cloud project — needs you
 
+> **Follow [GOOGLE_SETUP.md](GOOGLE_SETUP.md) instead of this section.** It is
+> the complete, do-it-once version: it settles the scopes before you open the
+> consent screen, because adding one afterwards means re-authorising every
+> mailbox. What follows is the short form.
+
 These steps require your Google account; I cannot do them for you.
 
 ### 2.1 Create the project

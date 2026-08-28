@@ -39,7 +39,8 @@ rewrite.
 | Document search | Full-text *inside* attachments, diacritics-insensitive |
 | Tracked changes | Word revisions read correctly — insertions kept, deletions recorded, comments indexed |
 | Document versions | A revised file is recognised as a new version, with a diff |
-| MCP server | 14 read-only tools, so Claude can query all of it — no API key, no token bill |
+| MCP server | 24 tools, so Claude can query and act — no API key, no token bill |
+| Mailbox actions | Labels, archive, drafts, bin — in risk tiers, all audited, destructive ones always ask |
 | Clients & matters | Conversations filed under case files, with confidence and a review queue |
 
 ## Quick start
@@ -50,13 +51,15 @@ make dev-db           # local PostgreSQL databases + extensions
 cp .env.example .env
 python -m app.core.crypto keygen     # paste into TOKEN_ENCRYPTION_KEY
 make migrate
-make test             # 409 tests
+make test             # 446 tests
 make seed             # load demo mail through the real pipeline
 make run              # API on http://localhost:8000  (docs at /docs)
 ```
 
-Connecting a real mailbox needs a Google Cloud project and an OAuth client —
-see [`docs/SETUP.md`](docs/SETUP.md).
+Connecting a real mailbox needs a Google Cloud project and an OAuth client.
+**Do that once, following [`docs/GOOGLE_SETUP.md`](docs/GOOGLE_SETUP.md)** —
+it decides the OAuth scopes up front, because adding one later means
+re-authorising every mailbox.
 
 ## Command line
 
@@ -126,6 +129,8 @@ not be reachable from the local network.
 - [`docs/BACKUP.md`](docs/BACKUP.md) — what is backed up, encryption, and how to restore
 - [`docs/MATTERS.md`](docs/MATTERS.md) — how conversations get filed, and why it never guesses hard
 - [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) — extraction, tracked changes, and document versions
+- [`docs/GOOGLE_SETUP.md`](docs/GOOGLE_SETUP.md) — **the Google Cloud setup, start here**
+- [`docs/ACTIONS.md`](docs/ACTIONS.md) — what the assistant may do to the mailbox, and what it must ask first
 - [`docs/MCP.md`](docs/MCP.md) — using it from Claude Code, Desktop, or your phone
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phases, what is done and what comes next
 

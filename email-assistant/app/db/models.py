@@ -692,6 +692,106 @@ class MatterLink(Base):
 
 
 # ---------------------------------------------------------------------------
+# Actions on the mailbox
+# ---------------------------------------------------------------------------
+
+
+class ActionType(enum.StrEnum):
+    LABEL_ADD = "label_add"
+    LABEL_REMOVE = "label_remove"
+    ARCHIVE = "archive"
+    UNARCHIVE = "unarchive"
+    DRAFT_CREATE = "draft_create"
+    DRAFT_UPDATE = "draft_update"
+    TRASH = "trash"
+    UNTRASH = "untrash"
+    DELETE_PERMANENT = "delete_permanent"
+    SEND = "send"
+
+
+class ActionStatus(enum.StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXECUTED = "executed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+
+class RiskTier(enum.StrEnum):
+    AUTOMATIC = "automatic"  # safe, reversible, done without asking
+    CONFIGURABLE = "configurable"  # automatic only if you switched it on
+    APPROVAL = "approval"  # never without an explicit yes
+
+
+class PendingAction(Base):
+    """Something the assistant wants to do to the mailbox.
+
+    Every action that changes Gmail passes through this table, including the
+    ones executed immediately — so "what did it do, and on whose say-so?" is
+    always a query, never a reconstruction.
+    """
+
+    __tablename__ = "pending_action"
+    __table_args__ = (
+        Index("ix_pending_action_status", "status", "created_at"),
+        Index("ix_pending_action_target", "target_type", "target_id"),
+        CheckConstraint(
+            "status IN ('pending','approved','rejected','executed','failed','expired')",
+            name="status_valid",
+        ),
+        CheckConstraint(
+            "risk_tier IN ('automatic','configurable','approval')",
+            name="risk_tier_valid",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("mailbox_account.id", ondelete="CASCADE"), nullable=False
+    )
+
+    action_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    risk_tier: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=ActionStatus.PENDING.value
+    )
+
+    # What it acts on: a message or a thread, by our id and by Gmail's.
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    gmail_target_id: Mapped[str | None] = mapped_column(String(64))
+
+    # A sentence a person can judge without reading the payload.
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    # Why the assistant proposed it.
+    reason: Mapped[str | None] = mapped_column(Text)
+    # Everything the executor needs: label names, draft body, and so on.
+    payload: Mapped[dict | None] = mapped_column(JSONB)
+
+    requested_by: Mapped[str] = mapped_column(String(32), nullable=False, default="agent")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # A proposal nobody answered should lapse rather than fire days later.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(64))
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    result: Mapped[dict | None] = mapped_column(JSONB)
+    error: Mapped[str | None] = mapped_column(Text)
+    # What it would take to put this back, when that is possible at all.
+    undo_hint: Mapped[str | None] = mapped_column(Text)
+
+    def is_open(self, now: datetime) -> bool:
+        if self.status != ActionStatus.PENDING.value:
+            return False
+        return self.expires_at is None or self.expires_at > now
+
+
+# ---------------------------------------------------------------------------
 # Audit
 # ---------------------------------------------------------------------------
 
