@@ -39,6 +39,7 @@ rewrite.
 | Document search | Full-text *inside* attachments, diacritics-insensitive |
 | Tracked changes | Word revisions read correctly — insertions kept, deletions recorded, comments indexed |
 | Document versions | A revised file is recognised as a new version, with a diff |
+| MCP server | 14 read-only tools, so Claude can query all of it — no API key, no token bill |
 | Clients & matters | Conversations filed under case files, with confidence and a review queue |
 
 ## Quick start
@@ -49,7 +50,7 @@ make dev-db           # local PostgreSQL databases + extensions
 cp .env.example .env
 python -m app.core.crypto keygen     # paste into TOKEN_ENCRYPTION_KEY
 make migrate
-make test             # 385 tests
+make test             # 409 tests
 make seed             # load demo mail through the real pipeline
 make run              # API on http://localhost:8000  (docs at /docs)
 ```
@@ -90,6 +91,19 @@ python -m app.cli versions Zmluva             # what changed between versions
 python -m app.cli versions --revised          # files with tracked changes
 ```
 
+## Using it from Claude
+
+No API key, no per-token cost — Claude queries the database as a tool over MCP:
+
+```bash
+claude mcp add email-assistant \
+  -- /full/path/to/email-assistant/.venv/bin/python -m app.mcp.server
+```
+
+Then ask it things: *"Where did the tax authority claim the CMR notes were
+duplicates?"*, *"What changed in the KOVACO contract between versions?"*.
+See [`docs/MCP.md`](docs/MCP.md) — including how to reach it from an iPhone.
+
 ## Running the whole stack
 
 With Docker (PostgreSQL, API and scheduler together):
@@ -112,6 +126,7 @@ not be reachable from the local network.
 - [`docs/BACKUP.md`](docs/BACKUP.md) — what is backed up, encryption, and how to restore
 - [`docs/MATTERS.md`](docs/MATTERS.md) — how conversations get filed, and why it never guesses hard
 - [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) — extraction, tracked changes, and document versions
+- [`docs/MCP.md`](docs/MCP.md) — using it from Claude Code, Desktop, or your phone
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phases, what is done and what comes next
 
 ## Layout

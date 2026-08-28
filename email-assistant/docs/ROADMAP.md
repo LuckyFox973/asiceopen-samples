@@ -86,13 +86,21 @@ machine.*
       - always requires your approval: send, delete, permanent delete, any
         material modification of existing correspondence
 
-## Phase 5 — access from Claude and Cowork
+## Phase 5 — access from Claude
 
-- [ ] MCP server exposing: `search_memory`, `search_emails`, `get_thread`,
-      `get_matter`, `get_client`, `get_tasks`, `create_task`, `create_followup`,
-      `get_daily_briefing`, `search_documents`, `get_attachment_text`,
-      `draft_email`, `request_archive`, `request_delete`
-- [ ] Read tools return data; write tools create pending actions, never act
+*Pulled forward: with an MCP server, Claude reasons over this memory using the
+subscription you already pay for. No API key, no token bill. That makes it the
+cheapest way to find out whether the system is useful at all.*
+
+- [x] **MCP server with 14 read-only tools** — mail, threads, documents,
+      versions, clients, matters, review queue, activity, sync, audit
+- [x] Runs over stdio (Claude Code) or streamable HTTP (remote connector,
+      reachable from a phone through a tunnel)
+- [x] A test asserts no tool can send, delete, archive or draft
+- [ ] Write tools (`create_task`, `create_followup`, `draft_email`,
+      `request_archive`, `request_delete`) — these create pending actions and
+      never act, so they ship with the approval workflow in phase 4
+- [ ] Authentication on the HTTP transport, before any tunnel carries real mail
 - [ ] Optional web UI for review and approval queues
 
 ## Open decisions
