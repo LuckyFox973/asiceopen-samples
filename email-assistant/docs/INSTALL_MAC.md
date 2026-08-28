@@ -102,10 +102,27 @@ cd ~/email-assistant/email-assistant
 Open the printed URL, sign in with the mailbox you want, approve. Google shows
 exactly the scopes you configured — read that screen.
 
-## 5. Pull the mail in
+Approving is not optional and not instant: the browser has to come back to a
+page saying the mailbox is connected. Until it does, nothing is connected.
+`auth-url` refuses to print anything if the first window is not running, since
+Google would redirect the browser into a closed port and the sign-in would be
+lost at the last step.
+
+Confirm before going on:
 
 ```bash
 ./.venv/bin/python -m app.cli accounts
+```
+
+Your address must appear. If the only line is `demo@example.invalid`, the
+authorisation did not finish — that is seeded demo data, not your mailbox.
+Remove it whenever you like with `./.venv/bin/python scripts/demo_seed.py --reset`.
+
+## 5. Pull the mail in
+
+Use your own address — the one `accounts` printed:
+
+```bash
 ./.venv/bin/python -m app.cli sync you@yourdomain.sk --mode initial
 ./.venv/bin/python -m app.cli extract
 ```

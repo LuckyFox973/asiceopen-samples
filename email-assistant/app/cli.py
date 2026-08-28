@@ -15,9 +15,11 @@ so behaviour cannot drift between the two.
 from __future__ import annotations
 
 import argparse
+import socket
 import sys
 import uuid
 from datetime import date
+from urllib.parse import urlparse
 
 from sqlalchemy import func, select
 
@@ -78,7 +80,7 @@ def cmd_check(_args: argparse.Namespace) -> int:
     print("\nOAuth scopes this application will request:")
     for scope in settings.gmail_scopes:
         print(f"  {scope}")
-    print("These must match the consent screen exactly — see docs/GOOGLE_SETUP.md.")
+    print("These must match the consent screen exactly — see docs/GOOGLE_CLOUD.md.")
 
     problems = verify_configuration(settings)
     if problems:
@@ -103,14 +105,55 @@ def cmd_keygen(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_auth_url(_args: argparse.Namespace) -> int:
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def unreachable_callback(redirect_uri: str) -> str | None:
+    """Describe why Google's redirect would land nowhere, or None if it lands.
+
+    Only loopback addresses are checked. A remote deployment may be perfectly
+    healthy and still unreachable from wherever this command happens to run,
+    and a false alarm there would be worse than no check at all.
+    """
+    parsed = urlparse(redirect_uri)
+    host = parsed.hostname or ""
+    if host not in LOOPBACK_HOSTS:
+        return None
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        socket.create_connection((host, port), timeout=0.5).close()
+    except OSError as exc:
+        return f"{host}:{port} — {exc.strerror or exc}"
+    return None
+
+
+def cmd_auth_url(args: argparse.Namespace) -> int:
     from app.gmail.oauth import OAuthNotConfiguredError, build_authorisation_url
+
+    settings = get_settings()
+
+    # Google redirects the browser to the callback the moment consent is
+    # given. If nothing is listening there the sign-in is lost and the state
+    # token is spent, so it is worth one connection attempt to find out first.
+    if not args.no_check:
+        problem = unreachable_callback(settings.google_oauth_redirect_uri)
+        if problem is not None:
+            print(f"error: nothing is listening on {problem}", file=sys.stderr)
+            print(
+                "\nGoogle sends the browser there after you approve, so the sign-in\n"
+                "would fail at the last step. Start the server first, in another\n"
+                "Terminal window:\n\n"
+                "    ./.venv/bin/uvicorn app.main:app --port 8000\n\n"
+                "then run this command again.  (--no-check skips this test.)",
+                file=sys.stderr,
+            )
+            return 1
 
     # The state is recorded in the database so the callback recognises this
     # flow as ours; without that it would — correctly — reject it.
     with session_scope() as session:
         try:
-            url, state, code_verifier = build_authorisation_url()
+            url, state, code_verifier = build_authorisation_url(settings)
             record_oauth_state(session, state, code_verifier)
         except OAuthNotConfiguredError as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -118,6 +161,7 @@ def cmd_auth_url(_args: argparse.Namespace) -> int:
     print("Open this URL in a browser and approve access:\n")
     print(url)
     print(f"\nValid for {int(OAUTH_STATE_TTL.total_seconds() // 60)} minutes.")
+    print("When the browser shows the confirmation page, run: python -m app.cli accounts")
     return 0
 
 
@@ -757,7 +801,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("check", help="verify configuration and database").set_defaults(func=cmd_check)
     sub.add_parser("keygen", help="generate a TOKEN_ENCRYPTION_KEY").set_defaults(func=cmd_keygen)
-    sub.add_parser("auth-url", help="print the Google consent URL").set_defaults(func=cmd_auth_url)
+    auth_parser = sub.add_parser("auth-url", help="print the Google consent URL")
+    auth_parser.add_argument(
+        "--no-check",
+        action="store_true",
+        help="print the URL even if the callback address is not listening",
+    )
+    auth_parser.set_defaults(func=cmd_auth_url)
     sub.add_parser("accounts", help="list connected mailboxes").set_defaults(func=cmd_accounts)
 
     sync_parser = sub.add_parser("sync", help="synchronise a mailbox")
