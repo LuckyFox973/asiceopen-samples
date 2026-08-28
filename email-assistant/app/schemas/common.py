@@ -84,6 +84,37 @@ class AttachmentOut(ORMModel):
     is_inline: bool
     download_status: str
     sha256: str | None = None
+    text_status: str | None = None
+    text_chars: int | None = None
+
+
+class DocumentTextOut(ORMModel):
+    status: str
+    method: str | None
+    char_count: int
+    page_count: int | None
+    truncated: bool
+    error: str | None
+    extracted_at: datetime | None
+
+
+class DocumentHitOut(BaseModel):
+    attachment_id: uuid.UUID
+    message_id: uuid.UUID
+    filename: str | None
+    mime_type: str | None
+    page_count: int | None
+    rank: float | None = None
+    highlight: str | None = None
+
+
+class ExtractionSummaryOut(BaseModel):
+    extracted: int
+    empty: int
+    needs_ocr: int
+    unsupported: int
+    failed: int
+    pending: int
 
 
 class MessageOut(ORMModel):

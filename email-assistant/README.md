@@ -35,6 +35,8 @@ rewrite.
 | OAuth safety | One-time state token verified on callback |
 | Scheduling | Local daemon: sync on an interval, backup once a day |
 | Backups | Encrypted (AES-256-GCM) to disk or Google Drive, with retention |
+| Document text | PDF, DOCX, XLSX, CSV, HTML, TXT parsed deterministically — no LLM |
+| Document search | Full-text *inside* attachments, diacritics-insensitive |
 
 ## Quick start
 
@@ -44,7 +46,7 @@ make dev-db           # local PostgreSQL databases + extensions
 cp .env.example .env
 python -m app.core.crypto keygen     # paste into TOKEN_ENCRYPTION_KEY
 make migrate
-make test             # 236 tests
+make test             # 299 tests
 make seed             # load demo mail through the real pipeline
 make run              # API on http://localhost:8000  (docs at /docs)
 ```
@@ -68,7 +70,11 @@ python -m app.cli prune-contacts              # reclaim orphaned personal data
 
 python -m app.cli backup run                  # encrypted; refuses without a key
 python -m app.cli backup verify <archive>
-python -m app.cli daemon                      # sync on an interval + daily backup
+python -m app.cli daemon                      # sync + extraction + daily backup
+
+python -m app.cli extract                     # parse stored attachments
+python -m app.cli extract --summary
+python -m app.cli find "CMR duplicitné"       # search inside documents
 ```
 
 ## Running the whole stack

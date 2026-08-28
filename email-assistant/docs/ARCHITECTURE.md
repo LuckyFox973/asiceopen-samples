@@ -182,6 +182,27 @@ Slovak has no PostgreSQL stemmer, so the text search configuration
 `websearch_to_tsquery`, which supports quoted phrases, `OR` and `-exclusion`,
 and never raises on malformed input.
 
+Attachment text is searched the same way, through a second generated column on
+`document_text`. That is what makes "where did the tax authority claim the CMR
+notes were duplicates?" answerable when the words appear only inside a PDF and
+nowhere in its file name.
+
+## Document text
+
+Attachments are parsed by libraries, not by a model: `pypdf`, `python-docx`,
+`openpyxl`, and plain decoding for text, CSV and HTML. Exact, reproducible, and
+free — a model is not asked to read what a parser can read.
+
+Format is detected from magic bytes before the MIME type, because mail clients
+mislabel attachments constantly. A PDF with pages but no text layer is recorded
+as `needs_ocr` rather than as an empty document, so scans form a queue instead
+of disappearing.
+
+Extraction is a separate pass from sync: parsing a large PDF is slow, a sync
+should not wait for it, and a file that failed to parse must be retryable
+without re-fetching mail. The scheduler runs a bounded batch each cycle, so a
+backlog catches up over several cycles instead of blocking one.
+
 Phase 3 adds `pgvector` embeddings for genuinely semantic recall. It ranks
 *alongside* these modes rather than replacing them — exact lookups must stay
 exact.

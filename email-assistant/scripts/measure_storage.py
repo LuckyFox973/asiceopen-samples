@@ -65,9 +65,7 @@ def main() -> int:
     rng = random.Random(args.seed)
 
     with session_scope() as session:
-        session.execute(
-            text("DELETE FROM mailbox_account WHERE email = :e"), {"e": BENCH_EMAIL}
-        )
+        session.execute(text("DELETE FROM mailbox_account WHERE email = :e"), {"e": BENCH_EMAIL})
         account = MailboxAccount(
             email=BENCH_EMAIL, display_name="Bench", sync_start_date=date(2026, 1, 1)
         )

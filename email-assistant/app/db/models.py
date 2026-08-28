@@ -88,6 +88,13 @@ SEARCH_VECTOR_EXPRESSION = (
 )
 
 
+# Document text carries no subject or sender, so it is a single unweighted
+# field.  Kept verbatim in migration 0003.
+DOCUMENT_SEARCH_VECTOR_EXPRESSION = (
+    "to_tsvector('public.sk_unaccent', coalesce(text, ''))"
+)
+
+
 def _pk() -> Mapped[uuid.UUID]:
     return mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
@@ -481,6 +488,47 @@ class Attachment(Base, TimestampMixin):
 
     message: Mapped[EmailMessage] = relationship(back_populates="attachments")
     blob: Mapped[AttachmentBlob | None] = relationship()
+
+
+class DocumentText(Base, TimestampMixin):
+    """Text extracted from one stored file.
+
+    Attached to the **blob**, not the attachment: a contract circulated twenty
+    times is parsed once, and phase 3 will hang embeddings off the same row.
+    """
+
+    __tablename__ = "document_text"
+    __table_args__ = (
+        Index("ix_document_text_status", "status"),
+        Index("ix_document_text_search", "search_vector", postgresql_using="gin"),
+        CheckConstraint(
+            "status IN ('extracted','empty','needs_ocr','unsupported','failed')",
+            name="status_valid",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    blob_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("attachment_blob.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    method: Mapped[str | None] = mapped_column(String(32))
+    text: Mapped[str | None] = mapped_column(Text)
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Maintained by PostgreSQL; must stay identical to migration 0003.
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed(DOCUMENT_SEARCH_VECTOR_EXPRESSION, persisted=True),
+        nullable=True,
+    )
+
+    blob: Mapped[AttachmentBlob] = relationship()
 
 
 # ---------------------------------------------------------------------------

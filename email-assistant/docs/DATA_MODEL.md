@@ -112,6 +112,18 @@ Name, `prefix` (stored in clear so a key can be identified and revoked without
 knowing it), `key_hash` (SHA-256 — the key itself is shown once, at creation),
 `last_used_at`, `expires_at`, `revoked_at`.
 
+### `document_text` — text extracted from one stored file
+
+`blob_id` (unique), `status`
+(`extracted`/`empty`/`needs_ocr`/`unsupported`/`failed`), `method`, `text`,
+`char_count`, `page_count`, `truncated`, `error`, `extracted_at`, and a
+generated `search_vector`.
+
+Attached to the **blob**, not the attachment: a contract circulated twenty
+times is parsed once, and phase 3 embeddings will hang off the same row.
+`needs_ocr` is a distinct status rather than a silent empty result — a scanned
+PDF with no text layer is a document waiting for OCR, not an empty one.
+
 ### `oauth_state` — one-time tokens for the authorisation flow
 
 `state`, `expires_at`, `consumed_at`. Issued when a flow starts, verified and
@@ -137,8 +149,6 @@ flagged `needs_review` and surfaced for confirmation rather than silently made.
   evidence (message and attachment ids), confidence, valid-from, superseded-by.
   Facts are superseded, never overwritten, so history stays auditable.
 - `note` — free-form human notes attached to any entity.
-- `document_text` — extracted text per **blob**, with extraction status and
-  method.
 - `embedding` — `pgvector` vectors for messages and document chunks, with the
   model that produced them, so a model change can be re-indexed selectively.
 - `ai_usage` — provider, model, input/output tokens, estimated cost, operation

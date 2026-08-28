@@ -40,6 +40,8 @@ def fake_world(monkeypatch):
         pruned=0,
         sync_error_for=set(),
         backup_error=False,
+        extracted=0,
+        extract_error=False,
     )
 
     @contextlib.contextmanager
@@ -67,6 +69,14 @@ def fake_world(monkeypatch):
         state.pruned += 1
         return []
 
+    def fake_extract_pending(_session, _storage, limit=None, **_kwargs):
+        if state.extract_error:
+            raise RuntimeError("storage unreadable")
+        state.extracted += 1
+        return SimpleNamespace(considered=2, extracted=2, needs_ocr=0)
+
+    monkeypatch.setattr(scheduler_module, "extract_pending", fake_extract_pending)
+    monkeypatch.setattr(scheduler_module, "build_storage", lambda _settings: object())
     monkeypatch.setattr(scheduler_module, "session_scope", fake_session_scope)
     monkeypatch.setattr(scheduler_module, "list_accounts", fake_list_accounts)
     monkeypatch.setattr(scheduler_module, "run_sync", fake_run_sync)
@@ -103,6 +113,27 @@ class TestSync:
         for _ in range(40):
             scheduler.tick()
         assert len(scheduler.stats.errors) == 50
+
+
+class TestExtraction:
+    def test_every_cycle_extracts_a_batch(self, fake_world):
+        scheduler = Scheduler(settings(backup_enabled=False), clock=lambda: BRATISLAVA_0200)
+        scheduler.tick()
+        assert fake_world.extracted == 1
+        assert scheduler.stats.documents_extracted == 2
+
+    def test_extraction_failure_does_not_stop_the_loop(self, fake_world):
+        fake_world.extract_error = True
+        scheduler = Scheduler(settings(backup_enabled=False), clock=lambda: BRATISLAVA_0200)
+        scheduler.tick()
+        assert fake_world.synced == ["a@x.sk", "b@x.sk"]
+        assert any("extraction_failed" in e for e in scheduler.stats.errors)
+
+    def test_extraction_failure_does_not_block_the_backup(self, fake_world):
+        fake_world.extract_error = True
+        scheduler = Scheduler(settings(), clock=lambda: BRATISLAVA_0500)
+        scheduler.tick()
+        assert fake_world.backups == 1
 
 
 class TestBackupTiming:

@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # --- Local scheduler -----------------------------------------------------
     scheduler_sync_interval_minutes: int = Field(default=15, ge=1)
     scheduler_backup_hour: int = Field(default=3, ge=0, le=23)
+    # Documents parsed per cycle.  Bounded so a large backlog catches up over
+    # several cycles instead of blocking one.
+    extract_batch_size: int = Field(default=50, ge=1, le=1000)
 
     # --- Internal job auth -------------------------------------------------
     job_auth_token: str = ""

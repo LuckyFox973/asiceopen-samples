@@ -15,7 +15,14 @@ from typing import Any
 from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.db.models import Attachment, EmailMessage, EmailParticipant, EmailThread
+from app.db.models import (
+    Attachment,
+    AttachmentBlob,
+    DocumentText,
+    EmailMessage,
+    EmailParticipant,
+    EmailThread,
+)
 
 # Must match the configuration created in migration 0001.
 TS_CONFIG = "public.sk_unaccent"
@@ -204,3 +211,73 @@ def attachment_search(
     total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     stmt = stmt.order_by(Attachment.created_at.desc()).limit(min(limit, 200)).offset(offset)
     return list(session.scalars(stmt).all()), total
+
+
+@dataclass(slots=True)
+class DocumentHit:
+    attachment: Attachment
+    document: DocumentText
+    rank: float | None = None
+    headline: str | None = None
+
+
+def search_documents(
+    session: Session,
+    account_id: uuid.UUID | None,
+    text_query: str,
+    limit: int = 25,
+    offset: int = 0,
+    with_highlight: bool = True,
+) -> tuple[list[DocumentHit], int]:
+    """Full-text search inside extracted attachment text.
+
+    Answers the question a filename cannot: "where did the tax authority claim
+    the CMR notes were duplicates?"  Results carry the attachment they came
+    from, so a hit is always traceable back to a message.
+    """
+    if not text_query or not text_query.strip():
+        return [], 0
+
+    tsquery = func.websearch_to_tsquery(TS_CONFIG, text_query.strip())
+    rank = func.ts_rank_cd(DocumentText.search_vector, tsquery)
+
+    stmt = (
+        select(Attachment, DocumentText, rank.label("rank"))
+        .join(AttachmentBlob, Attachment.blob_id == AttachmentBlob.id)
+        .join(DocumentText, DocumentText.blob_id == AttachmentBlob.id)
+        .where(DocumentText.search_vector.op("@@")(tsquery))
+    )
+    if account_id is not None:
+        stmt = stmt.where(Attachment.account_id == account_id)
+
+    total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+
+    stmt = (
+        stmt.order_by(rank.desc(), Attachment.created_at.desc())
+        .limit(max(1, min(limit, 100)))
+        .offset(max(0, offset))
+    )
+
+    hits: list[DocumentHit] = []
+    for attachment, document, rank_value in session.execute(stmt).all():
+        headline = None
+        if with_highlight and document.text:
+            headline = session.scalar(
+                select(
+                    func.ts_headline(
+                        TS_CONFIG,
+                        document.text,
+                        tsquery,
+                        text("'MaxWords=35, MinWords=15, MaxFragments=2'"),
+                    )
+                )
+            )
+        hits.append(
+            DocumentHit(
+                attachment=attachment,
+                document=document,
+                rank=float(rank_value or 0.0),
+                headline=headline,
+            )
+        )
+    return hits, total

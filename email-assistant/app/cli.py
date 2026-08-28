@@ -341,6 +341,52 @@ def cmd_daemon(args: argparse.Namespace) -> int:
     return 1 if stats.errors else 0
 
 
+def cmd_extract(args: argparse.Namespace) -> int:
+    from app.services.documents import extract_pending, extraction_summary
+    from app.services.storage import build_storage
+
+    with session_scope() as session:
+        if args.summary:
+            for key, value in extraction_summary(session).items():
+                print(f"{key:<12}: {value}")
+            return 0
+
+        stats = extract_pending(
+            session,
+            build_storage(),
+            limit=args.limit,
+            retry_failed=args.retry_failed,
+        )
+        if not stats.considered:
+            print("Nothing to extract — every stored file already has a result.")
+            return 0
+        print(
+            f"{stats.considered} file(s): {stats.extracted} extracted "
+            f"({stats.characters:,} chars), {stats.needs_ocr} need OCR, "
+            f"{stats.unsupported} unsupported, {stats.empty} empty, "
+            f"{stats.failed} failed"
+        )
+        for error in stats.errors[:5]:
+            print(f"  ! {error}")
+    return 0
+
+
+def cmd_find(args: argparse.Namespace) -> int:
+    """Search inside documents rather than message bodies."""
+    from app.services.search import search_documents
+
+    with session_scope() as session:
+        hits, total = search_documents(session, None, args.query, limit=args.limit)
+        print(f"{total} document(s) match; showing {len(hits)}\n")
+        for hit in hits:
+            pages = f", {hit.document.page_count} pages" if hit.document.page_count else ""
+            print(f"{hit.attachment.filename or '(unnamed)'}{pages}")
+            if hit.headline:
+                print(f"    {hit.headline}")
+            print()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="app.cli", description="Email AI Assistant")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -394,6 +440,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-cycles", type=int, default=None, help="stop after N cycles (testing)"
     )
     daemon_parser.set_defaults(func=cmd_daemon)
+
+    extract_parser = sub.add_parser(
+        "extract", help="pull text out of stored attachments"
+    )
+    extract_parser.add_argument("--limit", type=int, default=100)
+    extract_parser.add_argument(
+        "--retry-failed", action="store_true", help="try previously failed files again"
+    )
+    extract_parser.add_argument(
+        "--summary", action="store_true", help="show counts instead of extracting"
+    )
+    extract_parser.set_defaults(func=cmd_extract)
+
+    find_parser = sub.add_parser("find", help="search inside document text")
+    find_parser.add_argument("query")
+    find_parser.add_argument("--limit", type=int, default=10)
+    find_parser.set_defaults(func=cmd_find)
     return parser
 
 

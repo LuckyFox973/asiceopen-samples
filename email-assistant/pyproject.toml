@@ -19,6 +19,10 @@ dependencies = [
     "structlog>=24.4.0",
     "httpx>=0.27.2",
     "tenacity>=9.0.0",
+    # Document text extraction — pure Python, no system dependencies.
+    "pypdf>=5.1.0",
+    "python-docx>=1.1.2",
+    "openpyxl>=3.1.5",
 ]
 
 [project.optional-dependencies]

@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -14,12 +15,16 @@ from app.db.models import (
     Attachment,
     AttachmentBlob,
     Contact,
+    DocumentText,
     EmailMessage,
     EmailThread,
     MailboxAccount,
 )
 from app.schemas.common import (
     AttachmentOut,
+    DocumentHitOut,
+    DocumentTextOut,
+    ExtractionSummaryOut,
     MessageDetailOut,
     MessageOut,
     Page,
@@ -28,10 +33,12 @@ from app.schemas.common import (
     ThreadDetailOut,
     ThreadOut,
 )
+from app.services.documents import extraction_summary, get_document_text
 from app.services.search import (
     MessageSearchQuery,
     attachment_search,
     highlight,
+    search_documents,
     search_messages,
     search_threads,
 )
@@ -57,6 +64,12 @@ def _attachment_out(session: Session, attachment: Attachment) -> AttachmentOut:
     if attachment.blob_id:
         blob = session.get(AttachmentBlob, attachment.blob_id)
         out.sha256 = blob.sha256 if blob else None
+        document = session.scalar(
+            select(DocumentText).where(DocumentText.blob_id == attachment.blob_id)
+        )
+        if document is not None:
+            out.text_status = document.status
+            out.text_chars = document.char_count
     return out
 
 
@@ -208,3 +221,63 @@ def stats(session: Session = SessionDep) -> StatsOut:
         oldest_message=span[0],
         newest_message=span[1],
     )
+
+
+@router.get("/documents/search", response_model=Page[DocumentHitOut])
+def search_document_text(
+    q: str = Query(description="Words to find inside attachment text"),
+    account_id: uuid.UUID | None = None,
+    with_highlight: bool = True,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: Session = SessionDep,
+) -> Page[DocumentHitOut]:
+    """Search inside documents, not just their file names."""
+    hits, total = search_documents(
+        session, account_id, q, limit=limit, offset=offset, with_highlight=with_highlight
+    )
+    return Page(
+        items=[
+            DocumentHitOut(
+                attachment_id=hit.attachment.id,
+                message_id=hit.attachment.message_id,
+                filename=hit.attachment.filename,
+                mime_type=hit.attachment.mime_type,
+                page_count=hit.document.page_count,
+                rank=hit.rank,
+                highlight=hit.headline,
+            )
+            for hit in hits
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/attachments/{attachment_id}/text", response_model=DocumentTextOut)
+def get_attachment_text(
+    attachment_id: uuid.UUID,
+    include_text: bool = Query(default=False, description="Return the full text too"),
+    session: Session = SessionDep,
+) -> DocumentTextOut:
+    document = get_document_text(session, attachment_id)
+    if document is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "No extraction result: the attachment is unknown, its bytes were "
+            "never downloaded, or extraction has not run yet.",
+        )
+    out = DocumentTextOut.model_validate(document)
+    if include_text:
+        # Returned as an extra field rather than always, so a listing never
+        # drags whole documents across the wire.
+        return JSONResponse(  # type: ignore[return-value]
+            content={**out.model_dump(mode="json"), "text": document.text}
+        )
+    return out
+
+
+@router.get("/documents/summary", response_model=ExtractionSummaryOut)
+def documents_summary(session: Session = SessionDep) -> ExtractionSummaryOut:
+    return ExtractionSummaryOut(**extraction_summary(session))

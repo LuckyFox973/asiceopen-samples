@@ -22,7 +22,9 @@ from app.core.logging import get_logger
 from app.db.session import session_scope
 from app.services.accounts import list_accounts
 from app.services.backup import create_backup, prune_backups
+from app.services.documents import extract_pending
 from app.services.runner import run_sync
+from app.services.storage import build_storage
 
 log = get_logger(__name__)
 
@@ -32,6 +34,7 @@ class SchedulerStats:
     cycles: int = 0
     syncs_run: int = 0
     sync_failures: int = 0
+    documents_extracted: int = 0
     backups_run: int = 0
     backup_failures: int = 0
     messages_created: int = 0
@@ -90,9 +93,32 @@ class Scheduler:
     def tick(self) -> SchedulerStats:
         self.stats.cycles += 1
         self._sync_all()
+        self._extract_documents()
         if self.settings.backup_enabled and self._backup_is_due():
             self._run_backup()
         return self.stats
+
+    def _extract_documents(self) -> None:
+        """Parse newly stored attachments, a bounded batch per cycle.
+
+        Bounded on purpose: a mailbox with thousands of unparsed documents
+        should catch up over several cycles rather than block one for an hour.
+        """
+        try:
+            with session_scope() as session:
+                stats = extract_pending(
+                    session, build_storage(self.settings), limit=self.settings.extract_batch_size
+                )
+            if stats.considered:
+                self.stats.documents_extracted += stats.extracted
+                log.info(
+                    "scheduler.extracted",
+                    considered=stats.considered,
+                    extracted=stats.extracted,
+                    needs_ocr=stats.needs_ocr,
+                )
+        except Exception as exc:  # noqa: BLE001 - the loop must survive
+            self._record_error("scheduler.extraction_failed", exc)
 
     def _sync_all(self) -> None:
         try:

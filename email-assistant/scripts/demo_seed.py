@@ -21,13 +21,26 @@ from sqlalchemy import select
 
 from app.db.models import MailboxAccount, MailboxAddress
 from app.db.session import session_scope
+from app.services.documents import extract_pending
 from app.services.storage import build_storage
 from app.services.sync import SyncEngine
 from tests.fixtures import attachment_part, gmail_message, multipart, text_part
+from tests.fixtures.documents import make_pdf
 from tests.fixtures.fake_gmail import FakeGmailClient
 
 DEMO_EMAIL = "demo@example.invalid"
 BASE = int(datetime(2026, 8, 20, 8, 0, tzinfo=UTC).timestamp() * 1000)
+
+
+# A genuine PDF, so the demo exercises text extraction and document search
+# rather than only the mail pipeline.
+DEMO_PDF = make_pdf(
+    [
+        "Rozhodnutie o danovej kontrole DPH za rok 2025. Spravca dane "
+        "konstatoval, ze predlozene CMR listy boli duplicitne.",
+        "Proti tomuto rozhodnutiu je pripustne odvolanie do 15 dni.",
+    ]
+)
 
 
 def hours(n: int) -> str:
@@ -45,7 +58,10 @@ def build_messages():
                 part_id="0",
             ),
             attachment_part(
-                "Rozhodnutie.pdf", size=23, attachment_id="att-rozhodnutie", part_id="1"
+                "Rozhodnutie.pdf",
+                size=len(DEMO_PDF),
+                attachment_id="att-rozhodnutie",
+                part_id="1",
             ),
         ],
     )
@@ -141,7 +157,7 @@ def main() -> int:
             account=account,
             client=FakeGmailClient(
                 build_messages(),
-                attachments={"att-rozhodnutie": b"%PDF-1.7 demo rozhodnutie"},
+                attachments={"att-rozhodnutie": DEMO_PDF},
             ),
             storage=build_storage(),
             default_start_date=date(2026, 8, 1),
@@ -153,6 +169,8 @@ def main() -> int:
             f"{run.messages_updated} updated, {run.messages_skipped} unchanged, "
             f"{run.attachments_created} attachments"
         )
+        stats = extract_pending(session, build_storage())
+        print(f"extraction: {stats.extracted} document(s), {stats.characters:,} characters")
         print(f"mailbox id: {account.id}")
     return 0
 
