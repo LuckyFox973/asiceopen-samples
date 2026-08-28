@@ -42,9 +42,9 @@ machine.*
 - [ ] Deploy to Cloud Run; Cloud SQL or Supabase; GCS attachments; Secret Manager
 - [ ] Cloud Scheduler → `/api/v1/jobs/sync-all`
 - [ ] Gmail push via Pub/Sub, with the scheduled pull kept as the safety net
-- [ ] `company`, `client`, `matter`, `matter_link` with confidence scores
-- [ ] Automatic matter proposals — never silent creation; low confidence sets
-      `needs_review`
+- [x] **`company`, `client`, `matter`, `matter_link`** with confidence scores
+- [x] **Automatic filing** by five deterministic rules — never silent creation;
+      low confidence sets `needs_review` and lands in a review queue
 - [ ] Client-scoped export and erasure endpoints
 - [ ] Backups and a restore drill that is actually performed
 

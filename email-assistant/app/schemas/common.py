@@ -167,6 +167,86 @@ class AuthStartOut(BaseModel):
     instructions: str
 
 
+class CompanyOut(ORMModel):
+    id: uuid.UUID
+    name: str
+    registration_number: str | None
+    domains: list[str] | None
+
+
+class ClientOut(ORMModel):
+    id: uuid.UUID
+    display_name: str
+    reference: str | None
+    status: str
+    company_id: uuid.UUID | None
+    retention_until: date | None
+
+
+class MatterOut(ORMModel):
+    id: uuid.UUID
+    client_id: uuid.UUID
+    title: str
+    reference: str | None
+    description: str | None
+    status: str
+    opened_on: date | None
+    closed_on: date | None
+
+
+class MatterDetailOut(MatterOut):
+    client_name: str | None = None
+    contents: dict[str, int] = Field(default_factory=dict)
+
+
+class MatterLinkOut(ORMModel):
+    id: uuid.UUID
+    matter_id: uuid.UUID
+    target_type: str
+    target_id: uuid.UUID
+    confidence: float
+    method: str
+    reason: str | None
+    needs_review: bool
+    confirmed_at: datetime | None
+
+
+class SuggestionOut(BaseModel):
+    thread_id: uuid.UUID
+    thread_subject: str | None
+    matter_id: uuid.UUID | None
+    matter_title: str | None
+    client_id: uuid.UUID | None
+    client_name: str | None
+    confidence: float
+    method: str
+    reason: str
+
+
+class AssignmentResultOut(BaseModel):
+    threads_considered: int
+    linked: int
+    flagged_for_review: int
+    unmatched: int
+    already_linked: int
+    dry_run: bool
+
+
+class ClientCreateIn(BaseModel):
+    display_name: str = Field(min_length=1, max_length=255)
+    reference: str | None = Field(default=None, max_length=64)
+    company_name: str | None = Field(default=None, max_length=255)
+    domains: list[str] = Field(default_factory=list)
+    registration_number: str | None = Field(default=None, max_length=32)
+
+
+class MatterCreateIn(BaseModel):
+    client_id: uuid.UUID
+    title: str = Field(min_length=1, max_length=500)
+    reference: str | None = Field(default=None, max_length=64)
+    description: str | None = None
+
+
 class StatsOut(BaseModel):
     accounts: int
     threads: int

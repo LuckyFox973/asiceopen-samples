@@ -124,24 +124,26 @@ times is parsed once, and phase 3 embeddings will hang off the same row.
 `needs_ocr` is a distinct status rather than a silent empty result — a scanned
 PDF with no text layer is a document waiting for OCR, not an empty one.
 
+### `company`, `client`, `matter`, `matter_link` — the case-file layer
+
+`company` is a legal entity whose `domains` are the strongest routing signal.
+`client` is someone you act for — a company, or a natural person through a
+contact — carrying `reference`, `status` and the GDPR fields `retention_note`
+and `retention_until`. `matter` is one case: title, `reference`, status,
+opened/closed dates.
+
+`matter_link` files something under a matter: `target_type`
+(`thread`/`message`/`attachment`/`contact`), `target_id`, `confidence`,
+`method` (which rule decided), `reason`, `needs_review`, `confirmed_at`.
+Deliberately many-to-many — one conversation often touches two files — and
+deliberately explicit about uncertainty. See [MATTERS.md](MATTERS.md).
+
 ### `oauth_state` — one-time tokens for the authorisation flow
 
 `state`, `expires_at`, `consumed_at`. Issued when a flow starts, verified and
 burnt on callback, so a third party cannot bind their own mailbox.
 
 ## Planned
-
-### Phase 2 — matters and clients
-
-- `company` — legal entity: name, registration number, domains.
-- `client` — a company or person you act for; retention policy; status.
-- `matter` — a case or file: reference, title, client, status, opened/closed.
-- `matter_link` — many-to-many from a matter to threads, messages, attachments
-  and contacts, each with `confidence` and `needs_review`. A conversation can
-  belong to several matters; nothing is force-fitted into one.
-
-Matters are proposed, not imposed: below a confidence threshold the link is
-flagged `needs_review` and surfaced for confirmation rather than silently made.
 
 ### Phase 3 — memory, documents, AI accounting
 

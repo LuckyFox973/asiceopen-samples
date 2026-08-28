@@ -19,6 +19,7 @@ from sqlalchemy import (
     Computed,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -90,9 +91,7 @@ SEARCH_VECTOR_EXPRESSION = (
 
 # Document text carries no subject or sender, so it is a single unweighted
 # field.  Kept verbatim in migration 0003.
-DOCUMENT_SEARCH_VECTOR_EXPRESSION = (
-    "to_tsvector('public.sk_unaccent', coalesce(text, ''))"
-)
+DOCUMENT_SEARCH_VECTOR_EXPRESSION = "to_tsvector('public.sk_unaccent', coalesce(text, ''))"
 
 
 def _pk() -> Mapped[uuid.UUID]:
@@ -529,6 +528,153 @@ class DocumentText(Base, TimestampMixin):
     )
 
     blob: Mapped[AttachmentBlob] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# Clients and matters — the "spis" (case file) layer
+# ---------------------------------------------------------------------------
+
+
+class MatterStatus(enum.StrEnum):
+    OPEN = "open"
+    PENDING = "pending"
+    CLOSED = "closed"
+
+
+class LinkTarget(enum.StrEnum):
+    THREAD = "thread"
+    MESSAGE = "message"
+    ATTACHMENT = "attachment"
+    CONTACT = "contact"
+
+
+class Company(Base, TimestampMixin):
+    """A legal entity. Its e-mail domains are the strongest routing signal."""
+
+    __tablename__ = "company"
+    __table_args__ = (
+        Index(
+            "ix_company_name_trgm",
+            "name",
+            postgresql_using="gin",
+            postgresql_ops={"name": "gin_trgm_ops"},
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    registration_number: Mapped[str | None] = mapped_column(String(32), index=True)
+    domains: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class Client(Base, TimestampMixin):
+    """Someone you act for — a company, or a natural person via a contact."""
+
+    __tablename__ = "client"
+    __table_args__ = (
+        Index(
+            "ix_client_name_trgm",
+            "display_name",
+            postgresql_using="gin",
+            postgresql_ops={"display_name": "gin_trgm_ops"},
+        ),
+        CheckConstraint("status IN ('active','inactive','archived')", name="status_valid"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(64), unique=True)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("company.id", ondelete="SET NULL"), index=True
+    )
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("contact.id", ondelete="SET NULL"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+
+    # GDPR: how long this client's data may be kept, and until when.
+    retention_note: Mapped[str | None] = mapped_column(Text)
+    retention_until: Mapped[date | None] = mapped_column(Date)
+
+    company: Mapped[Company | None] = relationship()
+    matters: Mapped[list[Matter]] = relationship(
+        back_populates="client", cascade="all, delete-orphan"
+    )
+
+
+class Matter(Base, TimestampMixin):
+    """One case or file: the unit everything else is filed under."""
+
+    __tablename__ = "matter"
+    __table_args__ = (
+        UniqueConstraint("client_id", "reference", name="uq_matter_client_reference"),
+        Index(
+            "ix_matter_title_trgm",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "gin_trgm_ops"},
+        ),
+        Index("ix_matter_client_status", "client_id", "status"),
+        CheckConstraint("status IN ('open','pending','closed')", name="status_valid"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("client.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(64))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+
+    opened_on: Mapped[date | None] = mapped_column(Date)
+    closed_on: Mapped[date | None] = mapped_column(Date)
+
+    client: Mapped[Client] = relationship(back_populates="matters")
+    links: Mapped[list[MatterLink]] = relationship(
+        back_populates="matter", cascade="all, delete-orphan"
+    )
+
+
+class MatterLink(Base):
+    """Something filed under a matter, with how sure we are and why.
+
+    A conversation may belong to several matters, so this is deliberately
+    many-to-many rather than a column on the thread.
+    """
+
+    __tablename__ = "matter_link"
+    __table_args__ = (
+        UniqueConstraint("matter_id", "target_type", "target_id", name="uq_matter_link_target"),
+        Index("ix_matter_link_target", "target_type", "target_id"),
+        Index("ix_matter_link_review", "needs_review"),
+        CheckConstraint(
+            "target_type IN ('thread','message','attachment','contact')",
+            name="target_type_valid",
+        ),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_in_range"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    matter_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("matter.id", ondelete="CASCADE"), nullable=False
+    )
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    # Which rule decided this, so a wrong link can be traced to its cause.
+    method: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    reason: Mapped[str | None] = mapped_column(Text)
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    matter: Mapped[Matter] = relationship(back_populates="links")
 
 
 # ---------------------------------------------------------------------------

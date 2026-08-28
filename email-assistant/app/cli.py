@@ -387,6 +387,124 @@ def cmd_find(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_client(args: argparse.Namespace) -> int:
+    from app.db.models import Client
+    from app.services.matters import create_client, upsert_company
+
+    with session_scope() as session:
+        if args.action == "list":
+            clients = session.scalars(select(Client).order_by(Client.display_name)).all()
+            if not clients:
+                print("No clients yet. Add one: python -m app.cli client add <name>")
+                return 0
+            for client in clients:
+                ref = f"  [{client.reference}]" if client.reference else ""
+                print(f"{client.id}  {client.display_name}{ref}  ({client.status})")
+            return 0
+
+        company = None
+        if args.domains:
+            company = upsert_company(session, args.company or args.name, domains=args.domains)
+        client = create_client(session, args.name, company=company, reference=args.reference)
+        domains = ", ".join(company.domains) if company and company.domains else "none"
+        print(f"Created client {client.display_name} ({client.id})")
+        print(f"  domains: {domains}")
+        return 0
+
+
+def cmd_matter(args: argparse.Namespace) -> int:
+    from app.db.models import Client, Matter
+    from app.services.matters import create_matter, matter_contents
+
+    with session_scope() as session:
+        if args.action == "list":
+            rows = session.execute(
+                select(Matter, Client)
+                .join(Client, Matter.client_id == Client.id)
+                .order_by(Client.display_name, Matter.title)
+            ).all()
+            if not rows:
+                print("No matters yet. Add one: python -m app.cli matter add <client-id> <title>")
+                return 0
+            for matter, client in rows:
+                ref = f"  [{matter.reference}]" if matter.reference else ""
+                counts = matter_contents(session, matter.id)
+                print(f"{client.display_name} / {matter.title}{ref}  ({matter.status})")
+                print(
+                    f"    {matter.id}  "
+                    f"{counts['thread']} thread(s), "
+                    f"{counts['messages_in_threads']} message(s)"
+                )
+            return 0
+
+        client = session.get(Client, uuid.UUID(args.client))
+        if client is None:
+            print(f"No client {args.client}", file=sys.stderr)
+            return 1
+        matter = create_matter(session, client, args.title, reference=args.reference)
+        print(f"Created matter {matter.title} ({matter.id}) for {client.display_name}")
+        return 0
+
+
+def cmd_file(args: argparse.Namespace) -> int:
+    """Run the assignment pass, or work the review queue."""
+    from app.db.models import EmailThread, Matter
+    from app.services.matters import (
+        assign_threads,
+        confirm_link,
+        links_needing_review,
+        reject_link,
+    )
+
+    with session_scope() as session:
+        if args.action == "review":
+            queue = links_needing_review(session)
+            if not queue:
+                print("Nothing waiting for review.")
+                return 0
+            for link in queue:
+                matter = session.get(Matter, link.matter_id)
+                thread = session.get(EmailThread, link.target_id)
+                print(f"{link.id}  confidence {link.confidence:.2f}  via {link.method}")
+                print(f"    thread : {thread.subject if thread else link.target_id}")
+                print(f"    matter : {matter.title if matter else link.matter_id}")
+                print(f"    reason : {link.reason or '-'}")
+                print()
+            print("Confirm: python -m app.cli file confirm <link-id>")
+            print("Reject : python -m app.cli file reject <link-id>")
+            return 0
+
+        if args.action == "confirm":
+            link = confirm_link(session, uuid.UUID(args.link_id))
+            if link is None:
+                print(f"No link {args.link_id}", file=sys.stderr)
+                return 1
+            print("Confirmed.")
+            return 0
+
+        if args.action == "reject":
+            if not reject_link(session, uuid.UUID(args.link_id)):
+                print(f"No link {args.link_id}", file=sys.stderr)
+                return 1
+            print("Rejected and removed.")
+            return 0
+
+        stats = assign_threads(session, limit=args.limit, dry_run=args.dry_run)
+        verb = "would file" if args.dry_run else "filed"
+        print(
+            f"{stats.threads_considered} thread(s) considered: "
+            f"{verb} {stats.linked}, {stats.flagged_for_review} need review, "
+            f"{stats.unmatched} unmatched, {stats.already_linked} already filed"
+        )
+        for suggestion in stats.proposals[:10]:
+            if suggestion.matter_id is None:
+                print(
+                    f"  ? {suggestion.client_name}: {suggestion.reason} "
+                    f"({suggestion.confidence:.2f})"
+                )
+        return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="app.cli", description="Email AI Assistant")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -441,9 +559,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daemon_parser.set_defaults(func=cmd_daemon)
 
-    extract_parser = sub.add_parser(
-        "extract", help="pull text out of stored attachments"
-    )
+    extract_parser = sub.add_parser("extract", help="pull text out of stored attachments")
     extract_parser.add_argument("--limit", type=int, default=100)
     extract_parser.add_argument(
         "--retry-failed", action="store_true", help="try previously failed files again"
@@ -457,6 +573,32 @@ def build_parser() -> argparse.ArgumentParser:
     find_parser.add_argument("query")
     find_parser.add_argument("--limit", type=int, default=10)
     find_parser.set_defaults(func=cmd_find)
+
+    client_parser = sub.add_parser("client", help="manage clients")
+    client_parser.add_argument("action", choices=["add", "list"])
+    client_parser.add_argument("name", nargs="?", default="")
+    client_parser.add_argument("--reference")
+    client_parser.add_argument("--company", help="company name, if different")
+    client_parser.add_argument(
+        "--domains", nargs="*", default=[], help="e-mail domains that identify this client"
+    )
+    client_parser.set_defaults(func=cmd_client)
+
+    matter_parser = sub.add_parser("matter", help="manage matters (case files)")
+    matter_parser.add_argument("action", choices=["add", "list"])
+    matter_parser.add_argument("client", nargs="?", default="", help="client id")
+    matter_parser.add_argument("title", nargs="?", default="")
+    matter_parser.add_argument("--reference", help="file number, e.g. KOV-2026-01")
+    matter_parser.set_defaults(func=cmd_matter)
+
+    file_parser = sub.add_parser("file", help="file threads under matters")
+    file_parser.add_argument(
+        "action", nargs="?", default="run", choices=["run", "review", "confirm", "reject"]
+    )
+    file_parser.add_argument("link_id", nargs="?", default="")
+    file_parser.add_argument("--limit", type=int, default=200)
+    file_parser.add_argument("--dry-run", action="store_true")
+    file_parser.set_defaults(func=cmd_file)
     return parser
 
 

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 
 from app.api.deps import require_api_key
-from app.api.routes import auth, health, messages, sync
+from app.api.routes import auth, health, matters, messages, sync
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.startup import verify_configuration
@@ -52,6 +52,9 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         messages.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)]
+    )
+    app.include_router(
+        matters.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)]
     )
     return app
 
