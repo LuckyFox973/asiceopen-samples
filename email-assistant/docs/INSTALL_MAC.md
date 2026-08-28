@@ -150,7 +150,21 @@ window and it stops — the trade-off of running on your own Mac.
 | `connection refused` on 5432 | PostgreSQL stopped. `brew services start postgresql@16` |
 | `redirect_uri_mismatch` | The URI in `.env` is not character-for-character one of the two you added in Google. |
 | `insufficient authentication scopes` | You enabled writes after authorising. Run `auth-url` again. |
+| `Missing code verifier` | An older checkout. Update (below), then start over from `auth-url`. |
 | Migrations fail | `./.venv/bin/alembic upgrade head` to see the real error. |
+
+## Updating
+
+```bash
+cd ~/email-assistant
+git pull
+cd email-assistant
+./.venv/bin/pip install --quiet -e ".[dev]"
+./.venv/bin/alembic upgrade head
+```
+
+Restart `uvicorn` afterwards — it holds the old code in memory. Nothing you
+have already synchronised is lost; migrations only add to the database.
 
 ## Removing it
 
