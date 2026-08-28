@@ -72,11 +72,14 @@ def build_flow(settings: Settings | None = None, state: str | None = None) -> Fl
 
 def build_authorisation_url(
     settings: Settings | None = None, state: str | None = None
-) -> tuple[str, str]:
-    """Return ``(url, state)``.
+) -> tuple[str, str, str | None]:
+    """Return ``(url, state, code_verifier)``.
 
-    The caller supplies *state* when it intends to verify it on callback; a
-    generated one is a convenience for the CLI, which cannot.
+    The verifier matters. The library uses PKCE, so the URL carries only a hash
+    of a secret it generated on the spot. The callback runs in a different
+    process and builds a different ``Flow``, which knows nothing of that
+    secret — so it has to travel with the state, or Google rejects the
+    exchange with "Missing code verifier".
     """
     settings = settings or get_settings()
     state = state or secrets.token_urlsafe(32)
@@ -86,14 +89,24 @@ def build_authorisation_url(
         include_granted_scopes="true",
         prompt="consent",  # force a refresh token even on re-authorisation
     )
-    return url, state
+    return url, state, getattr(flow, "code_verifier", None)
 
 
 def exchange_code(
-    code: str, state: str | None = None, settings: Settings | None = None
+    code: str,
+    state: str | None = None,
+    settings: Settings | None = None,
+    code_verifier: str | None = None,
 ) -> Credentials:
+    """Trade the authorisation code for tokens.
+
+    *code_verifier* is the PKCE secret belonging to the flow that produced the
+    URL. It must be that exact one.
+    """
     settings = settings or get_settings()
     flow = build_flow(settings, state=state)
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
     return flow.credentials  # type: ignore[return-value]
 

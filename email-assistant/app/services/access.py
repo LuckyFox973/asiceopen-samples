@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from app.core.security import (
     display_prefix,
     generate_api_key,
-    generate_oauth_state,
     hash_api_key,
     keys_match,
 )
@@ -123,32 +122,42 @@ def revoke_api_key(session: Session, prefix_or_id: str) -> ApiKey | None:
 # --- OAuth state ----------------------------------------------------------
 
 
-def issue_oauth_state(session: Session) -> str:
-    """Mint a state token for an authorisation flow that is starting."""
+def record_oauth_state(session: Session, state: str, code_verifier: str | None = None) -> str:
+    """Store a state the caller already generated, with its PKCE verifier.
+
+    The flow needs the state before it can produce a URL, and the verifier only
+    exists once it has, so the two arrive together and are stored together —
+    the callback runs in another process and can recover neither otherwise.
+    """
     purge_expired_oauth_states(session)
-    state = generate_oauth_state()
     session.add(
-        OAuthState(state=state, expires_at=datetime.now(UTC) + OAUTH_STATE_TTL)
+        OAuthState(
+            state=state,
+            code_verifier=code_verifier,
+            expires_at=datetime.now(UTC) + OAUTH_STATE_TTL,
+        )
     )
     session.flush()
     return state
 
 
-def consume_oauth_state(session: Session, state: str | None) -> bool:
-    """Verify and burn a state token. False means the callback is not ours."""
+def consume_oauth_state(session: Session, state: str | None) -> tuple[bool, str | None]:
+    """Verify and burn a state token.
+
+    Returns ``(accepted, code_verifier)``. A False first element means the
+    callback did not come from a flow this service started.
+    """
     if not state:
-        return False
+        return False, None
     record = session.scalar(select(OAuthState).where(OAuthState.state == state))
     now = datetime.now(UTC)
     if record is None or record.consumed_at is not None or record.expires_at <= now:
-        return False
+        return False, None
     record.consumed_at = now
     session.flush()
-    return True
+    return True, record.code_verifier
 
 
 def purge_expired_oauth_states(session: Session) -> int:
-    result = session.execute(
-        delete(OAuthState).where(OAuthState.expires_at <= datetime.now(UTC))
-    )
+    result = session.execute(delete(OAuthState).where(OAuthState.expires_at <= datetime.now(UTC)))
     return result.rowcount or 0

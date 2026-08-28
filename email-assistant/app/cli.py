@@ -37,8 +37,8 @@ from app.db.session import session_scope
 from app.services.access import (
     OAUTH_STATE_TTL,
     create_api_key,
-    issue_oauth_state,
     list_api_keys,
+    record_oauth_state,
     revoke_api_key,
 )
 from app.services.accounts import get_account_by_email, list_accounts
@@ -110,8 +110,8 @@ def cmd_auth_url(_args: argparse.Namespace) -> int:
     # flow as ours; without that it would — correctly — reject it.
     with session_scope() as session:
         try:
-            state = issue_oauth_state(session)
-            url, _ = build_authorisation_url(state=state)
+            url, state, code_verifier = build_authorisation_url()
+            record_oauth_state(session, state, code_verifier)
         except OAuthNotConfiguredError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

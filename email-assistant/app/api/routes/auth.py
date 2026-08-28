@@ -21,23 +21,23 @@ from app.gmail.oauth import (
     to_identity,
 )
 from app.schemas.common import AuthStartOut
-from app.services.access import consume_oauth_state, issue_oauth_state
+from app.services.access import consume_oauth_state, record_oauth_state
 from app.services.accounts import refresh_send_as_addresses, upsert_account_from_identity
 
 router = APIRouter(prefix="/auth/google", tags=["auth"])
 log = get_logger(__name__)
 
 
-@router.post(
-    "/start", response_model=AuthStartOut, dependencies=[Depends(require_api_key)]
-)
+@router.post("/start", response_model=AuthStartOut, dependencies=[Depends(require_api_key)])
 def start_authorisation(
     session: Session = SessionDep, settings: Settings = SettingsDep
 ) -> AuthStartOut:
     """Return the Google consent URL to open in a browser."""
     try:
-        state = issue_oauth_state(session)
-        url, _ = build_authorisation_url(settings, state=state)
+        # The flow generates the PKCE verifier while building the URL, so the
+        # state is recorded afterwards, with the verifier alongside it.
+        url, state, code_verifier = build_authorisation_url(settings)
+        record_oauth_state(session, state, code_verifier)
     except OAuthNotConfiguredError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return AuthStartOut(
@@ -67,7 +67,8 @@ def oauth_callback(
 
     # The callback carries no API key — Google redirects the browser here — so
     # the one-time state token is what proves this flow is the one we started.
-    if not consume_oauth_state(session, state):
+    accepted, code_verifier = consume_oauth_state(session, state)
+    if not accepted:
         log.warning("oauth.state_rejected", state_present=bool(state))
         return HTMLResponse(
             _page(
@@ -79,7 +80,9 @@ def oauth_callback(
         )
 
     try:
-        credentials = exchange_code(code, state=state, settings=settings)
+        credentials = exchange_code(
+            code, state=state, settings=settings, code_verifier=code_verifier
+        )
         identity = to_identity(credentials)
     except Exception as exc:  # noqa: BLE001
         log.error("oauth.exchange_failed", error=str(exc))

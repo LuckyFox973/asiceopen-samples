@@ -11,15 +11,16 @@ from sqlalchemy import select
 
 from app.api.deps import require_api_key
 from app.core.config import Settings, get_settings
+from app.core.security import generate_oauth_state
 from app.db.models import ApiKey, AuditLog, Contact, OAuthState
 from app.db.session import get_db
 from app.main import create_app
 from app.services.access import (
     consume_oauth_state,
     create_api_key,
-    issue_oauth_state,
     list_api_keys,
     purge_expired_oauth_states,
+    record_oauth_state,
     revoke_api_key,
     verify_api_key,
 )
@@ -104,26 +105,97 @@ class TestApiKeyLifecycle:
 
 class TestOAuthState:
     def test_issued_state_is_accepted_once(self, db_session):
-        state = issue_oauth_state(db_session)
-        assert consume_oauth_state(db_session, state) is True
-        assert consume_oauth_state(db_session, state) is False
+        state = record_oauth_state(db_session, generate_oauth_state())
+        assert consume_oauth_state(db_session, state)[0] is True
+        assert consume_oauth_state(db_session, state)[0] is False
 
     def test_unknown_state_is_rejected(self, db_session):
-        assert consume_oauth_state(db_session, "forged-state") is False
+        assert consume_oauth_state(db_session, "forged-state")[0] is False
 
     def test_missing_state_is_rejected(self, db_session):
-        assert consume_oauth_state(db_session, None) is False
-        assert consume_oauth_state(db_session, "") is False
+        assert consume_oauth_state(db_session, None)[0] is False
+        assert consume_oauth_state(db_session, "")[0] is False
 
     def test_expired_state_is_rejected(self, db_session):
-        state = issue_oauth_state(db_session)
+        state = record_oauth_state(db_session, generate_oauth_state())
         record = db_session.scalar(select(OAuthState).where(OAuthState.state == state))
         record.expires_at = datetime.now(UTC) - timedelta(seconds=1)
         db_session.flush()
-        assert consume_oauth_state(db_session, state) is False
+        assert consume_oauth_state(db_session, state)[0] is False
+
+
+class TestPkceVerifier:
+    """The authorisation URL carries only a hash of a secret the flow invents.
+
+    The callback runs in another process and builds a different Flow, so unless
+    that secret is stored with the state and handed back, Google answers the
+    exchange with "(invalid_grant) Missing code verifier" — which is exactly
+    what happened the first time a real mailbox was connected.
+    """
+
+    def test_the_verifier_survives_the_round_trip(self, db_session):
+        record_oauth_state(db_session, "state-abc", "verifier-xyz")
+        accepted, verifier = consume_oauth_state(db_session, "state-abc")
+        assert accepted is True
+        assert verifier == "verifier-xyz"
+
+    def test_a_state_stored_without_one_returns_none(self, db_session):
+        record_oauth_state(db_session, "state-plain")
+        assert consume_oauth_state(db_session, "state-plain") == (True, None)
+
+    def test_a_rejected_state_yields_no_verifier(self, db_session):
+        record_oauth_state(db_session, "state-once", "verifier-once")
+        consume_oauth_state(db_session, "state-once")
+        assert consume_oauth_state(db_session, "state-once") == (False, None)
+
+    def test_the_url_builder_produces_a_verifier_to_store(self, monkeypatch):
+        """PKCE is on by default, so a verifier must come back with the URL."""
+        from app.core.config import Settings
+        from app.gmail.oauth import build_authorisation_url
+
+        settings = Settings(
+            google_client_id="test-client-id.apps.googleusercontent.com",
+            google_client_secret="test-secret",
+            google_oauth_redirect_uri="http://localhost:8000/api/v1/auth/google/callback",
+            _env_file=None,
+        )
+        url, state, verifier = build_authorisation_url(settings)
+
+        assert "code_challenge=" in url
+        assert "code_challenge_method=S256" in url
+        assert verifier, "the URL uses PKCE, so a verifier must be returned with it"
+        assert state in url
+
+    def test_the_verifier_reaches_the_token_exchange(self, monkeypatch):
+        """The value stored with the state must be the one sent to Google."""
+        from app.core.config import Settings
+        from app.gmail import oauth as oauth_module
+
+        seen = {}
+
+        class FakeFlow:
+            code_verifier = None
+
+            def fetch_token(self, code):
+                seen["code"] = code
+                seen["verifier"] = self.code_verifier
+
+            @property
+            def credentials(self):
+                return "creds"
+
+        monkeypatch.setattr(oauth_module, "build_flow", lambda *a, **k: FakeFlow())
+        result = oauth_module.exchange_code(
+            "auth-code",
+            state="s",
+            settings=Settings(_env_file=None),
+            code_verifier="the-verifier",
+        )
+        assert result == "creds"
+        assert seen == {"code": "auth-code", "verifier": "the-verifier"}
 
     def test_expired_states_are_purged(self, db_session):
-        state = issue_oauth_state(db_session)
+        state = record_oauth_state(db_session, generate_oauth_state())
         record = db_session.scalar(select(OAuthState).where(OAuthState.state == state))
         record.expires_at = datetime.now(UTC) - timedelta(minutes=1)
         db_session.flush()
@@ -254,7 +326,7 @@ class TestHttpAuthentication:
         assert "did not match" in response.text
 
     def test_callback_rejects_a_reused_state(self, secured_client, db_session):
-        state = issue_oauth_state(db_session)
+        state = record_oauth_state(db_session, generate_oauth_state())
         consume_oauth_state(db_session, state)
         response = secured_client.get(
             "/api/v1/auth/google/callback", params={"code": "x", "state": state}
