@@ -6,6 +6,7 @@ import socket
 
 import pytest
 
+from app import cli
 from app.cli import unreachable_callback
 
 
@@ -48,3 +49,36 @@ class TestUnreachableCallback:
 
     def test_localhost_resolves_like_the_loopback_address(self, closed_port):
         assert unreachable_callback(f"http://localhost:{closed_port}/callback") is not None
+
+
+class NoRows:
+    """A session that finds nothing, whichever way it is asked."""
+
+    def get(self, *_args, **_kwargs):
+        return None
+
+    def scalar(self, *_args, **_kwargs):
+        return None
+
+
+class TestUnknownMailbox:
+    """A mistyped address should name the real ones, not send you to another command."""
+
+    def test_the_connected_mailboxes_are_listed(self, monkeypatch):
+        connected = [type("Account", (), {"email": "hello@foxgroup.sk"})()]
+        monkeypatch.setattr(cli, "list_accounts", lambda _session: connected)
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli._resolve_account(NoRows(), "typo@example.sk")
+
+        message = str(excinfo.value)
+        assert "typo@example.sk" in message
+        assert "hello@foxgroup.sk" in message
+
+    def test_an_empty_database_points_at_auth_url(self, monkeypatch):
+        monkeypatch.setattr(cli, "list_accounts", lambda _session: [])
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli._resolve_account(NoRows(), "nobody@example.sk")
+
+        assert "auth-url" in str(excinfo.value)

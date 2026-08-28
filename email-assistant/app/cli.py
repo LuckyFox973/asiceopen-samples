@@ -54,9 +54,18 @@ def _resolve_account(session, identifier: str) -> MailboxAccount:
         account = session.get(MailboxAccount, uuid.UUID(identifier))
     except ValueError:
         account = get_account_by_email(session, identifier)
-    if account is None:
-        raise SystemExit(f"No mailbox matches {identifier!r}. Try: python -m app.cli accounts")
-    return account
+    if account is not None:
+        return account
+    # Naming the alternatives costs one query and saves the round trip through
+    # `accounts` — a mistyped or invented address is the usual reason to land here.
+    known = [record.email for record in list_accounts(session)]
+    if not known:
+        raise SystemExit(
+            f"No mailbox matches {identifier!r} — none are connected yet.\n"
+            "Connect one: python -m app.cli auth-url"
+        )
+    listed = "\n".join(f"  {email}" for email in known)
+    raise SystemExit(f"No mailbox matches {identifier!r}. Connected mailboxes:\n{listed}")
 
 
 def cmd_check(_args: argparse.Namespace) -> int:
