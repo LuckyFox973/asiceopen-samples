@@ -90,8 +90,13 @@ SEARCH_VECTOR_EXPRESSION = (
 
 
 # Document text carries no subject or sender, so it is a single unweighted
-# field.  Kept verbatim in migration 0003.
-DOCUMENT_SEARCH_VECTOR_EXPRESSION = "to_tsvector('public.sk_unaccent', coalesce(text, ''))"
+# field.  Margin comments are indexed with the body — in a negotiation they
+# often carry the substance.  Text struck out by a tracked change is not: a
+# figure someone removed must never surface as if the document still said it.
+# Kept verbatim in the migration that last changed it.
+DOCUMENT_SEARCH_VECTOR_EXPRESSION = (
+    "to_tsvector('public.sk_unaccent', coalesce(text, '') || ' ' || coalesce(comment_text, ''))"
+)
 
 
 def _pk() -> Mapped[uuid.UUID]:
@@ -520,7 +525,16 @@ class DocumentText(Base, TimestampMixin):
     error: Mapped[str | None] = mapped_column(Text)
     extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    # Maintained by PostgreSQL; must stay identical to migration 0003.
+    # Tracked changes and margin comments (Word).
+    deleted_text: Mapped[str | None] = mapped_column(Text)
+    comment_text: Mapped[str | None] = mapped_column(Text)
+    revision_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    revision_authors: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    revision_summary: Mapped[str | None] = mapped_column(Text)
+
+    # Maintained by PostgreSQL; must stay identical to migration 0005.
     search_vector: Mapped[str | None] = mapped_column(
         TSVECTOR,
         Computed(DOCUMENT_SEARCH_VECTOR_EXPRESSION, persisted=True),

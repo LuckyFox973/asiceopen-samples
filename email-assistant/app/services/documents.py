@@ -18,6 +18,7 @@ from app.core.logging import get_logger
 from app.db.models import Attachment, AttachmentBlob, AuditLog, DocumentText
 from app.services.extraction import ExtractionStatus, extract
 from app.services.storage import AttachmentStorage
+from app.services.versions import normalise_filename
 
 log = get_logger(__name__)
 
@@ -115,7 +116,7 @@ def extract_blob(
         return record
 
     result = extract(data, mime_type=mime_type, filename=filename)
-    return _upsert(
+    record = _upsert(
         session,
         blob,
         status=result.status,
@@ -124,7 +125,20 @@ def extract_blob(
         page_count=result.page_count,
         truncated=result.truncated,
         error=result.error,
+        deleted_text=result.deleted_text,
+        comment_text=result.comment_text,
+        revision_count=result.revision_count,
+        revision_authors=result.revision_authors,
+        revision_summary=result.revision_summary,
     )
+    if result.revision_summary:
+        log.info(
+            "extraction.revisions_found",
+            filename=filename,
+            summary=result.revision_summary,
+        )
+    _note_new_version(session, blob, filename)
+    return record
 
 
 def _upsert(
@@ -136,10 +150,13 @@ def _upsert(
     page_count: int | None = None,
     truncated: bool = False,
     error: str | None = None,
+    deleted_text: str = "",
+    comment_text: str = "",
+    revision_count: int = 0,
+    revision_authors: list[str] | None = None,
+    revision_summary: str | None = None,
 ) -> DocumentText:
-    record = session.scalar(
-        select(DocumentText).where(DocumentText.blob_id == blob.id)
-    )
+    record = session.scalar(select(DocumentText).where(DocumentText.blob_id == blob.id))
     if record is None:
         record = DocumentText(blob_id=blob.id)
         session.add(record)
@@ -151,9 +168,74 @@ def _upsert(
     record.page_count = page_count
     record.truncated = truncated
     record.error = error
+    record.deleted_text = deleted_text or None
+    record.comment_text = comment_text or None
+    record.revision_count = revision_count
+    record.revision_authors = revision_authors or None
+    record.revision_summary = revision_summary
     record.extracted_at = datetime.now(UTC)
     session.flush()
     return record
+
+
+def _note_new_version(session: Session, blob: AttachmentBlob, filename: str | None) -> None:
+    """Record in the audit log that a known file arrived with new content.
+
+    Deduplication is by content, so a revised Word document is a *different*
+    blob — correctly parsed on its own, but easy to miss as a new version of
+    something already on file.  This is the signal that says: this changed.
+    """
+    if not filename:
+        return
+
+    family = normalise_filename(filename)
+    if not family:
+        return
+
+    # Narrow in SQL on the first significant word, then compare families
+    # exactly in Python — the normalisation strips version noise that no
+    # LIKE pattern could express.
+    anchor = family.split(" ", 1)[0]
+    if len(anchor) < 3:
+        return
+
+    earlier = None
+    candidates = session.execute(
+        select(Attachment.filename, AttachmentBlob.sha256)
+        .join(AttachmentBlob, Attachment.blob_id == AttachmentBlob.id)
+        .where(
+            func.lower(Attachment.filename).like(f"%{anchor}%"),
+            AttachmentBlob.id != blob.id,
+        )
+        .limit(200)
+    ).all()
+    for candidate_name, candidate_sha in candidates:
+        if normalise_filename(candidate_name) == family and candidate_sha != blob.sha256:
+            earlier = candidate_sha
+            break
+    if earlier is None:
+        return
+
+    session.add(
+        AuditLog(
+            occurred_at=datetime.now(UTC),
+            actor="system",
+            action="documents.new_version",
+            entity_type="attachment_blob",
+            entity_id=str(blob.id),
+            summary=(
+                f"{filename!r} arrived with different content — a previous "
+                "version is already on file"
+            ),
+            details={
+                "filename": filename,
+                "sha256": blob.sha256,
+                "previous_sha256": earlier,
+            },
+            automatic=True,
+        )
+    )
+    session.flush()
 
 
 def extract_pending(
@@ -212,9 +294,7 @@ def extraction_summary(session: Session) -> dict[str, int]:
     """Counts by status, plus how many stored files still have no result."""
     counts = dict(
         session.execute(
-            select(DocumentText.status, func.count(DocumentText.id)).group_by(
-                DocumentText.status
-            )
+            select(DocumentText.status, func.count(DocumentText.id)).group_by(DocumentText.status)
         ).all()
     )
     summary = {status: int(counts.get(status, 0)) for status in (s.value for s in ExtractionStatus)}
@@ -234,6 +314,4 @@ def get_document_text(session: Session, attachment_id: uuid.UUID) -> DocumentTex
     attachment = session.get(Attachment, attachment_id)
     if attachment is None or attachment.blob_id is None:
         return None
-    return session.scalar(
-        select(DocumentText).where(DocumentText.blob_id == attachment.blob_id)
-    )
+    return session.scalar(select(DocumentText).where(DocumentText.blob_id == attachment.blob_id))

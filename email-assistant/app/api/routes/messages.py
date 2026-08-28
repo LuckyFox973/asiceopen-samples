@@ -24,6 +24,7 @@ from app.schemas.common import (
     AttachmentOut,
     DocumentHitOut,
     DocumentTextOut,
+    DocumentVersionOut,
     ExtractionSummaryOut,
     MessageDetailOut,
     MessageOut,
@@ -32,6 +33,8 @@ from app.schemas.common import (
     StatsOut,
     ThreadDetailOut,
     ThreadOut,
+    VersionDiffOut,
+    VersionHistoryOut,
 )
 from app.services.documents import extraction_summary, get_document_text
 from app.services.search import (
@@ -41,6 +44,12 @@ from app.services.search import (
     search_documents,
     search_messages,
     search_threads,
+)
+from app.services.versions import (
+    count_versions,
+    diff_versions,
+    documents_with_revisions,
+    version_history,
 )
 
 router = APIRouter(tags=["mail"])
@@ -70,6 +79,9 @@ def _attachment_out(session: Session, attachment: Attachment) -> AttachmentOut:
         if document is not None:
             out.text_status = document.status
             out.text_chars = document.char_count
+            out.revision_count = document.revision_count
+            out.revision_summary = document.revision_summary
+    out.version_count = count_versions(session, attachment.filename) or 1
     return out
 
 
@@ -281,3 +293,66 @@ def get_attachment_text(
 @router.get("/documents/summary", response_model=ExtractionSummaryOut)
 def documents_summary(session: Session = SessionDep) -> ExtractionSummaryOut:
     return ExtractionSummaryOut(**extraction_summary(session))
+
+
+@router.get("/attachments/{attachment_id}/versions", response_model=VersionHistoryOut)
+def attachment_versions(
+    attachment_id: uuid.UUID, session: Session = SessionDep
+) -> VersionHistoryOut:
+    """Every version of this document we have seen, oldest first.
+
+    Files are deduplicated by content, so a revised Word document is a
+    separate stored file.  This is what puts the versions back together.
+    """
+    history = version_history(session, attachment_id)
+    if not history.versions:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Unknown attachment, or it has no file name."
+        )
+    return VersionHistoryOut(
+        family=history.family,
+        count=history.count,
+        has_multiple=history.has_multiple,
+        versions=[
+            DocumentVersionOut(
+                attachment_id=v.attachment_id,
+                message_id=v.message_id,
+                filename=v.filename,
+                sha256=v.sha256,
+                received_at=v.received_at,
+                char_count=v.char_count,
+                revision_count=v.revision_count,
+                revision_summary=v.revision_summary,
+            )
+            for v in history.versions
+        ],
+    )
+
+
+@router.get("/attachments/{attachment_id}/diff/{other_id}", response_model=VersionDiffOut)
+def attachment_diff(
+    attachment_id: uuid.UUID, other_id: uuid.UUID, session: Session = SessionDep
+) -> VersionDiffOut:
+    """What changed between the extracted text of two versions."""
+    diff = diff_versions(session, attachment_id, other_id)
+    if diff is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Both attachments must exist and have extracted text.",
+        )
+    return VersionDiffOut(
+        identical=diff.is_identical,
+        similarity=diff.similarity,
+        added_lines=diff.added_lines,
+        removed_lines=diff.removed_lines,
+        unified=diff.unified,
+        summary=diff.summary(),
+    )
+
+
+@router.get("/documents/revised", response_model=list[DocumentTextOut])
+def revised_documents(
+    limit: int = Query(default=50, ge=1, le=200), session: Session = SessionDep
+) -> list[DocumentTextOut]:
+    """Documents carrying tracked changes or comments — worth a person's eye."""
+    return [DocumentTextOut.model_validate(d) for d in documents_with_revisions(session, limit)]

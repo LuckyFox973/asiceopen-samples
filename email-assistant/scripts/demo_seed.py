@@ -25,7 +25,7 @@ from app.services.documents import extract_pending
 from app.services.storage import build_storage
 from app.services.sync import SyncEngine
 from tests.fixtures import attachment_part, gmail_message, multipart, text_part
-from tests.fixtures.documents import make_pdf
+from tests.fixtures.documents import make_docx, make_docx_with_revisions, make_pdf
 from tests.fixtures.fake_gmail import FakeGmailClient
 
 DEMO_EMAIL = "demo@example.invalid"
@@ -40,6 +40,22 @@ DEMO_PDF = make_pdf(
         "konstatoval, ze predlozene CMR listy boli duplicitne.",
         "Proti tomuto rozhodnutiu je pripustne odvolanie do 15 dni.",
     ]
+)
+
+
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+# The same contract twice: a clean draft, then the other side's revision.
+# This is what makes version tracking visible in the demo.
+DEMO_DOCX_V1 = make_docx(["Zmluva o dielo", "Zmluvna pokuta je 5000 EUR.", "Lehota: 30 dni."])
+DEMO_DOCX_V2 = make_docx_with_revisions(
+    before="Zmluvna pokuta je ",
+    deleted="5000 EUR",
+    inserted="2000 EUR",
+    after=". Lehota: 30 dni.",
+    delete_author="Protistrana",
+    insert_author="Protistrana",
+    comment=("Advokat", "Znizenie pokuty neakceptujeme, trvame na povodnej sume."),
 )
 
 
@@ -103,6 +119,50 @@ def build_messages():
             labels=["INBOX"],
         ),
         gmail_message(
+            message_id="demo-5",
+            thread_id="demo-t4",
+            subject="Zmluva o dielo – navrh",
+            from_="Protistrana <pravnik@kovaco.example>",
+            to=DEMO_EMAIL,
+            internal_date_ms=hours(4),
+            payload=multipart(
+                "multipart/mixed",
+                [
+                    text_part("Posielam navrh zmluvy.", part_id="0"),
+                    attachment_part(
+                        "Zmluva.docx",
+                        mime_type=DOCX_MIME,
+                        size=len(DEMO_DOCX_V1),
+                        attachment_id="att-zmluva-v1",
+                        part_id="1",
+                    ),
+                ],
+            ),
+            labels=["INBOX"],
+        ),
+        gmail_message(
+            message_id="demo-6",
+            thread_id="demo-t4",
+            subject="Re: Zmluva o dielo – navrh",
+            from_="Protistrana <pravnik@kovaco.example>",
+            to=DEMO_EMAIL,
+            internal_date_ms=hours(52),
+            payload=multipart(
+                "multipart/mixed",
+                [
+                    text_part("V prilohe nase pripomienky v sledovanych zmenach.", part_id="0"),
+                    attachment_part(
+                        "Zmluva_v2.docx",
+                        mime_type=DOCX_MIME,
+                        size=len(DEMO_DOCX_V2),
+                        attachment_id="att-zmluva-v2",
+                        part_id="1",
+                    ),
+                ],
+            ),
+            labels=["INBOX"],
+        ),
+        gmail_message(
             message_id="demo-4",
             thread_id="demo-t3",
             subject="Newsletter – zmeny v daňovom poriadku",
@@ -157,7 +217,11 @@ def main() -> int:
             account=account,
             client=FakeGmailClient(
                 build_messages(),
-                attachments={"att-rozhodnutie": DEMO_PDF},
+                attachments={
+                    "att-rozhodnutie": DEMO_PDF,
+                    "att-zmluva-v1": DEMO_DOCX_V1,
+                    "att-zmluva-v2": DEMO_DOCX_V2,
+                },
             ),
             storage=build_storage(),
             default_start_date=date(2026, 8, 1),

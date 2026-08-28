@@ -15,7 +15,7 @@ import csv
 import io
 import re
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from app.core.logging import get_logger
@@ -47,9 +47,20 @@ class ExtractionResult:
     error: str | None = None
     truncated: bool = False
 
+    # Tracked changes and comments — populated for .docx, empty elsewhere.
+    deleted_text: str = ""
+    comment_text: str = ""
+    revision_count: int = 0
+    revision_authors: list[str] = field(default_factory=list)
+    revision_summary: str | None = None
+
     @property
     def char_count(self) -> int:
         return len(self.text)
+
+    @property
+    def has_revisions(self) -> bool:
+        return self.revision_count > 0
 
 
 # ---------------------------------------------------------------------------
@@ -167,37 +178,43 @@ def extract_pdf(data: bytes) -> ExtractionResult:
 
 
 def extract_docx(data: bytes) -> ExtractionResult:
-    import docx
+    """Read a Word file, keeping insertions and recording what was removed.
+
+    Deliberately not ``python-docx``'s ``paragraph.text``: that drops both
+    sides of a tracked change, including the *inserted* text, which is what
+    the document currently says.  A contract whose figure was changed under
+    review would otherwise be stored with no figure at all.
+    """
+    from app.services.docx_revisions import read_docx
 
     try:
-        document = docx.Document(io.BytesIO(data))
-    except Exception as exc:  # noqa: BLE001 - python-docx raises broadly
-        return ExtractionResult(
-            ExtractionStatus.FAILED, method="python-docx", error=str(exc)[:500]
-        )
+        content = read_docx(data)
+    except ValueError as exc:
+        return ExtractionResult(ExtractionStatus.FAILED, method="docx-xml", error=str(exc)[:500])
+    except Exception as exc:  # noqa: BLE001 - malformed XML in the wild
+        return ExtractionResult(ExtractionStatus.FAILED, method="docx-xml", error=str(exc)[:500])
 
-    parts = [p.text for p in document.paragraphs if p.text and p.text.strip()]
-    # Tables carry the substance in many legal documents; ignoring them would
-    # lose exactly the parts worth searching.
-    for table in document.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
-            if cells:
-                parts.append(" | ".join(cells))
-    return _finish(normalise("\n".join(parts)), "python-docx")
+    comment_text = "\n".join(f"[{c.author or 'unknown'}] {c.text}" for c in content.comments)
+    result = _finish(normalise(content.current_text), "docx-xml")
+    result.deleted_text = normalise(content.deleted_text)
+    result.comment_text = normalise(comment_text)
+    result.revision_count = len(content.revisions)
+    result.revision_authors = content.revision_authors
+    result.revision_summary = content.summary()
+
+    # A document that is nothing but comments still carries information.
+    if result.status is ExtractionStatus.EMPTY and (result.comment_text or result.deleted_text):
+        result.status = ExtractionStatus.EXTRACTED
+    return result
 
 
 def extract_xlsx(data: bytes) -> ExtractionResult:
     import openpyxl
 
     try:
-        workbook = openpyxl.load_workbook(
-            io.BytesIO(data), read_only=True, data_only=True
-        )
+        workbook = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except Exception as exc:  # noqa: BLE001 - openpyxl raises broadly
-        return ExtractionResult(
-            ExtractionStatus.FAILED, method="openpyxl", error=str(exc)[:500]
-        )
+        return ExtractionResult(ExtractionStatus.FAILED, method="openpyxl", error=str(exc)[:500])
 
     lines: list[str] = []
     try:

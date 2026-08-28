@@ -119,6 +119,12 @@ knowing it), `key_hash` (SHA-256 — the key itself is shown once, at creation),
 `char_count`, `page_count`, `truncated`, `error`, `extracted_at`, and a
 generated `search_vector`.
 
+Word files additionally carry `deleted_text`, `comment_text`,
+`revision_count`, `revision_authors` and `revision_summary`. The generated
+`search_vector` covers `text` **and** `comment_text`, but never `deleted_text`
+— a figure struck out by a revision must not surface as if the document still
+said it. See [DOCUMENTS.md](DOCUMENTS.md).
+
 Attached to the **blob**, not the attachment: a contract circulated twenty
 times is parsed once, and phase 3 embeddings will hang off the same row.
 `needs_ocr` is a distinct status rather than a silent empty result — a scanned

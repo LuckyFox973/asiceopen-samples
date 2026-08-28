@@ -505,6 +505,75 @@ def cmd_file(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_versions(args: argparse.Namespace) -> int:
+    """Show what changed in documents that arrived more than once."""
+    from app.db.models import Attachment
+    from app.services.versions import (
+        diff_versions,
+        documents_with_revisions,
+        families_with_multiple_versions,
+        version_history,
+    )
+
+    with session_scope() as session:
+        if args.revised:
+            flagged = documents_with_revisions(session, limit=args.limit)
+            if not flagged:
+                print("No documents with tracked changes or comments.")
+                return 0
+            for document in flagged:
+                name = session.scalar(
+                    select(Attachment.filename).where(Attachment.blob_id == document.blob_id)
+                )
+                print(f"{name or '(unnamed)'}")
+                print(f"    {document.revision_summary}")
+                if document.deleted_text:
+                    print(f"    removed: {document.deleted_text[:100]}")
+            return 0
+
+        if not args.filename:
+            families = families_with_multiple_versions(session, limit=args.limit)
+            if not families:
+                print("No document has been seen with more than one version.")
+                return 0
+            print("Documents seen in more than one version:\n")
+            for family, count in families:
+                print(f"  {family}  ({count} versions)")
+            print("\nDetail: python -m app.cli versions <filename>")
+            return 0
+
+        attachment = session.scalar(
+            select(Attachment).where(Attachment.filename.ilike(f"%{args.filename}%")).limit(1)
+        )
+        if attachment is None:
+            print(f"No attachment matches {args.filename!r}", file=sys.stderr)
+            return 1
+
+        history = version_history(session, attachment.id)
+        print(f"Document family: {history.family}  ({history.count} version(s))\n")
+        for index, version in enumerate(history.versions, start=1):
+            stamp = (
+                version.received_at.strftime("%Y-%m-%d %H:%M")
+                if version.received_at
+                else "unknown date"
+            )
+            print(f"  v{index}  {stamp}  {version.filename}")
+            print(f"      {version.char_count:,} chars, sha {(version.sha256 or '?')[:12]}")
+            if version.revision_summary:
+                print(f"      tracked changes: {version.revision_summary}")
+
+        if history.count > 1:
+            older, newer = history.versions[-2], history.versions[-1]
+            diff = diff_versions(session, older.attachment_id, newer.attachment_id)
+            if diff is not None:
+                print(f"\nLast change: {diff.summary()}")
+                for line in diff.removed_lines[:5]:
+                    print(f"  - {line[:110]}")
+                for line in diff.added_lines[:5]:
+                    print(f"  + {line[:110]}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="app.cli", description="Email AI Assistant")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -599,6 +668,18 @@ def build_parser() -> argparse.ArgumentParser:
     file_parser.add_argument("--limit", type=int, default=200)
     file_parser.add_argument("--dry-run", action="store_true")
     file_parser.set_defaults(func=cmd_file)
+
+    versions_parser = sub.add_parser(
+        "versions", help="documents that arrived more than once, and what changed"
+    )
+    versions_parser.add_argument(
+        "filename", nargs="?", default="", help="show detail for one document"
+    )
+    versions_parser.add_argument(
+        "--revised", action="store_true", help="list documents with tracked changes"
+    )
+    versions_parser.add_argument("--limit", type=int, default=50)
+    versions_parser.set_defaults(func=cmd_versions)
     return parser
 
 

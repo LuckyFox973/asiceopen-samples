@@ -53,6 +53,10 @@ machine.*
 - [x] **Text extraction per blob**: PDF, DOCX, XLSX, CSV, HTML, TXT —
       deterministic parsing, no model involved; scans flagged `needs_ocr`
 - [x] **Full-text search inside documents**, with matching-passage highlights
+- [x] **Word tracked changes and comments** read correctly — insertions kept,
+      deletions recorded separately, comments indexed
+- [x] **Document version families** with diffs, and an audit signal when a known
+      file arrives with new content
 - [ ] OCR for scanned documents (`needs_ocr` marks the queue)
 - [ ] `AIProvider` abstraction; Claude as the primary provider
 - [ ] Model routing — cheap models for classification and short summaries,

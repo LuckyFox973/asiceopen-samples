@@ -37,6 +37,8 @@ rewrite.
 | Backups | Encrypted (AES-256-GCM) to disk or Google Drive, with retention |
 | Document text | PDF, DOCX, XLSX, CSV, HTML, TXT parsed deterministically — no LLM |
 | Document search | Full-text *inside* attachments, diacritics-insensitive |
+| Tracked changes | Word revisions read correctly — insertions kept, deletions recorded, comments indexed |
+| Document versions | A revised file is recognised as a new version, with a diff |
 | Clients & matters | Conversations filed under case files, with confidence and a review queue |
 
 ## Quick start
@@ -47,7 +49,7 @@ make dev-db           # local PostgreSQL databases + extensions
 cp .env.example .env
 python -m app.core.crypto keygen     # paste into TOKEN_ENCRYPTION_KEY
 make migrate
-make test             # 339 tests
+make test             # 385 tests
 make seed             # load demo mail through the real pipeline
 make run              # API on http://localhost:8000  (docs at /docs)
 ```
@@ -82,6 +84,10 @@ python -m app.cli matter add <client-id> "Kasačná sťažnosť" --reference KOV
 python -m app.cli file run --dry-run          # what would be filed where
 python -m app.cli file run
 python -m app.cli file review                 # the uncertain ones
+
+python -m app.cli versions                    # documents seen more than once
+python -m app.cli versions Zmluva             # what changed between versions
+python -m app.cli versions --revised          # files with tracked changes
 ```
 
 ## Running the whole stack
@@ -105,6 +111,7 @@ not be reachable from the local network.
 - [`docs/SECURITY.md`](docs/SECURITY.md) — scopes, secrets, GDPR, deletion and export
 - [`docs/BACKUP.md`](docs/BACKUP.md) — what is backed up, encryption, and how to restore
 - [`docs/MATTERS.md`](docs/MATTERS.md) — how conversations get filed, and why it never guesses hard
+- [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) — extraction, tracked changes, and document versions
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phases, what is done and what comes next
 
 ## Layout

@@ -86,6 +86,9 @@ class AttachmentOut(ORMModel):
     sha256: str | None = None
     text_status: str | None = None
     text_chars: int | None = None
+    revision_count: int = 0
+    revision_summary: str | None = None
+    version_count: int = 1
 
 
 class DocumentTextOut(ORMModel):
@@ -96,6 +99,11 @@ class DocumentTextOut(ORMModel):
     truncated: bool
     error: str | None
     extracted_at: datetime | None
+    revision_count: int = 0
+    revision_authors: list[str] | None = None
+    revision_summary: str | None = None
+    deleted_text: str | None = None
+    comment_text: str | None = None
 
 
 class DocumentHitOut(BaseModel):
@@ -115,6 +123,33 @@ class ExtractionSummaryOut(BaseModel):
     unsupported: int
     failed: int
     pending: int
+
+
+class DocumentVersionOut(BaseModel):
+    attachment_id: uuid.UUID
+    message_id: uuid.UUID
+    filename: str | None
+    sha256: str | None
+    received_at: datetime | None
+    char_count: int
+    revision_count: int
+    revision_summary: str | None
+
+
+class VersionHistoryOut(BaseModel):
+    family: str
+    count: int
+    has_multiple: bool
+    versions: list[DocumentVersionOut]
+
+
+class VersionDiffOut(BaseModel):
+    identical: bool
+    similarity: float
+    added_lines: list[str]
+    removed_lines: list[str]
+    unified: str
+    summary: str
 
 
 class MessageOut(ORMModel):

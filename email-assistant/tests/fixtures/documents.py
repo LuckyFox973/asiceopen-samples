@@ -98,3 +98,84 @@ def make_broken_zip() -> bytes:
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("random.txt", "not an office document")
     return buffer.getvalue()
+
+
+def make_docx_with_revisions(
+    *,
+    before: str = "Zmluvna pokuta je ",
+    deleted: str = "5000 EUR",
+    inserted: str = "2000 EUR",
+    after: str = ".",
+    delete_author: str = "Advokat",
+    insert_author: str = "Protistrana",
+    comment: tuple[str, str] | None = None,
+) -> bytes:
+    """A .docx carrying real tracked changes, and optionally a comment.
+
+    Built by injecting genuine ``w:ins`` / ``w:del`` markup into a document
+    python-docx produced, because python-docx cannot author revisions itself.
+    """
+    import io
+    import re
+    import zipfile
+
+    import docx
+
+    document = docx.Document()
+    document.add_paragraph("PLACEHOLDER")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    base = buffer.getvalue()
+
+    def esc(value: str) -> str:
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    body = "<w:p>"
+    if before:
+        body += f"<w:r><w:t xml:space='preserve'>{esc(before)}</w:t></w:r>"
+    if deleted:
+        body += (
+            f'<w:del w:id="101" w:author="{esc(delete_author)}" '
+            f'w:date="2026-08-01T10:00:00Z">'
+            f"<w:r><w:delText xml:space='preserve'>{esc(deleted)}</w:delText></w:r></w:del>"
+        )
+    if inserted:
+        body += (
+            f'<w:ins w:id="102" w:author="{esc(insert_author)}" '
+            f'w:date="2026-08-02T11:00:00Z">'
+            f"<w:r><w:t xml:space='preserve'>{esc(inserted)}</w:t></w:r></w:ins>"
+        )
+    if after:
+        body += f"<w:r><w:t xml:space='preserve'>{esc(after)}</w:t></w:r>"
+    body += "</w:p>"
+
+    with zipfile.ZipFile(io.BytesIO(base)) as archive:
+        document_xml = archive.read("word/document.xml").decode()
+        others = {
+            name: archive.read(name)
+            for name in archive.namelist()
+            if name != "word/document.xml"
+        }
+
+    document_xml = re.sub(
+        r"<w:p\b.*?</w:p>", body, document_xml, count=1, flags=re.DOTALL
+    )
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", document_xml)
+        for name, payload in others.items():
+            archive.writestr(name, payload)
+        if comment:
+            author, text = comment
+            archive.writestr(
+                "word/comments.xml",
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<w:comments xmlns:w="http://schemas.openxmlformats.org/'
+                'wordprocessingml/2006/main">'
+                f'<w:comment w:id="1" w:author="{esc(author)}" '
+                f'w:date="2026-08-03T09:00:00Z">'
+                f"<w:p><w:r><w:t>{esc(text)}</w:t></w:r></w:p>"
+                "</w:comment></w:comments>",
+            )
+    return out.getvalue()
