@@ -124,11 +124,18 @@ Use your own address — the one `accounts` printed:
 
 ```bash
 ./.venv/bin/python -m app.cli sync you@yourdomain.sk --mode initial
-./.venv/bin/python -m app.cli extract
 ```
 
-The first sync stops after a couple of thousand messages and reports `partial`.
-Run the same `sync` command again to continue. Repeat until it says `completed`.
+It runs until the mailbox is caught up and prints a line per pass. Leave it.
+A year of mail takes tens of minutes; you can stop it with Ctrl-C and start it
+again with the same command, and it carries on where it stopped — nothing
+already fetched is fetched twice.
+
+Then pull the text out of the attachments:
+
+```bash
+./.venv/bin/python -m app.cli extract
+```
 
 Then look at what it has:
 

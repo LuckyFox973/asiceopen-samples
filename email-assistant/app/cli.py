@@ -239,7 +239,8 @@ def cmd_accounts(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_sync(args: argparse.Namespace) -> int:
+def _sync_once(args: argparse.Namespace) -> tuple[str, str | None, dict[str, int]]:
+    """One pass, in its own transaction, so progress survives an interruption."""
     with session_scope() as session:
         account = _resolve_account(session, args.account)
         if args.start_date:
@@ -251,18 +252,63 @@ def cmd_sync(args: argparse.Namespace) -> int:
             mode=args.mode,
             download_attachments=not args.no_attachments,
         )
-        print(
-            f"{run.kind} sync {run.status}: "
-            f"{run.messages_created} new, {run.messages_updated} updated, "
-            f"{run.messages_skipped} unchanged, "
-            f"{run.attachments_created} attachments, "
-            f"{run.threads_touched} threads"
+        return (
+            run.status,
+            run.error,
+            {
+                "new": run.messages_created,
+                "updated": run.messages_updated,
+                "unchanged": run.messages_skipped,
+                "attachments": run.attachments_created,
+                "threads": run.threads_touched,
+            },
         )
-        if run.error:
-            print(f"error: {run.error}")
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    """Synchronise until the mailbox is caught up.
+
+    A single pass stops at the per-run message limit and reports ``partial``,
+    which used to mean the operator ran the same command over and over. That
+    is a loop, and a loop belongs in the program.
+    """
+    totals = {"new": 0, "updated": 0, "unchanged": 0, "attachments": 0, "threads": 0}
+    passes = 0
+
+    while True:
+        status, error, counts = _sync_once(args)
+        passes += 1
+        for key, value in counts.items():
+            totals[key] += value
+
+        print(
+            f"pass {passes}: {counts['new']} new, {counts['updated']} updated, "
+            f"{counts['unchanged']} unchanged, {counts['attachments']} attachments"
+            f"   (total so far: {totals['new']} new)"
+        )
+
+        if error:
+            print(f"\nStopped: {error}", file=sys.stderr)
+            print("Nothing already fetched is lost. Run the same command to resume.")
             return 1
-        if run.status == "partial":
-            print("Run hit the per-run limit; run again to continue.")
+        if status == "completed":
+            break
+        if args.once:
+            print("Not finished yet — run the same command again to continue.")
+            return 0
+        if not any(counts[key] for key in ("new", "updated", "unchanged")):
+            # `partial` while fetching nothing would repeat forever.
+            print("\nStopped: a pass fetched nothing but the mailbox is not complete.")
+            print("Run the same command again later, or report this output.")
+            return 1
+
+    print(
+        f"\nDone. {totals['new']} messages, {totals['attachments']} attachments, "
+        f"{totals['threads']} threads, in {passes} "
+        f"{'pass' if passes == 1 else 'passes'}."
+    )
+    if totals["new"]:
+        print("Next: python -m app.cli extract")
     return 0
 
 
@@ -824,6 +870,11 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument("--mode", choices=["auto", "initial", "incremental"], default="auto")
     sync_parser.add_argument("--start-date", help="override the start date (YYYY-MM-DD)")
     sync_parser.add_argument("--no-attachments", action="store_true", help="store metadata only")
+    sync_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="do a single pass instead of running until the mailbox is caught up",
+    )
     sync_parser.set_defaults(func=cmd_sync)
 
     search_parser = sub.add_parser("search", help="full-text search stored mail")

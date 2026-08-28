@@ -82,3 +82,67 @@ class TestUnknownMailbox:
             cli._resolve_account(NoRows(), "nobody@example.sk")
 
         assert "auth-url" in str(excinfo.value)
+
+
+class TestSyncLoop:
+    """`sync` keeps going until the mailbox is caught up, so a person does not have to."""
+
+    @staticmethod
+    def _args(**overrides):
+        defaults = {
+            "account": "hello@example.sk",
+            "mode": "initial",
+            "start_date": None,
+            "no_attachments": False,
+            "once": False,
+        }
+        defaults.update(overrides)
+        return type("Args", (), defaults)()
+
+    @staticmethod
+    def _counts(new=100):
+        return {"new": new, "updated": 0, "unchanged": 0, "attachments": 0, "threads": 0}
+
+    def _record_passes(self, monkeypatch, outcomes):
+        calls = []
+
+        def fake_pass(_args):
+            calls.append(1)
+            return outcomes[len(calls) - 1]
+
+        monkeypatch.setattr(cli, "_sync_once", fake_pass)
+        return calls
+
+    def test_partial_passes_repeat_until_completed(self, monkeypatch, capsys):
+        calls = self._record_passes(
+            monkeypatch,
+            [
+                ("partial", None, self._counts()),
+                ("partial", None, self._counts()),
+                ("completed", None, self._counts(40)),
+            ],
+        )
+        assert cli.cmd_sync(self._args()) == 0
+        assert len(calls) == 3
+        assert "240 messages" in capsys.readouterr().out
+
+    def test_an_error_stops_the_loop(self, monkeypatch, capsys):
+        calls = self._record_passes(
+            monkeypatch, [("partial", "rate limit exceeded", self._counts())]
+        )
+        assert cli.cmd_sync(self._args()) == 1
+        assert len(calls) == 1
+        assert "rate limit exceeded" in capsys.readouterr().err
+
+    def test_a_pass_that_fetches_nothing_stops_the_loop(self, monkeypatch, capsys):
+        """`partial` forever with nothing arriving would spin until interrupted."""
+        calls = self._record_passes(monkeypatch, [("partial", None, self._counts(0))])
+        assert cli.cmd_sync(self._args()) == 1
+        assert len(calls) == 1
+        assert "fetched nothing" in capsys.readouterr().out
+
+    def test_once_does_a_single_pass(self, monkeypatch, capsys):
+        calls = self._record_passes(monkeypatch, [("partial", None, self._counts())])
+        assert cli.cmd_sync(self._args(once=True)) == 0
+        assert len(calls) == 1
+        assert "run the same command again" in capsys.readouterr().out
