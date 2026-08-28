@@ -50,9 +50,7 @@ def require_api_key(
     return record
 
 
-def get_account_or_404(
-    account_id: uuid.UUID, session: Session = SessionDep
-) -> MailboxAccount:
+def get_account_or_404(account_id: uuid.UUID, session: Session = SessionDep) -> MailboxAccount:
     account = get_account(session, account_id)
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No mailbox {account_id}")

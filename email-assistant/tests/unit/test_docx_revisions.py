@@ -78,7 +78,10 @@ class TestComments:
     def test_a_document_with_only_comments_is_not_empty(self):
         result = extract(
             make_docx_with_revisions(
-                before="", deleted="", inserted="", after="",
+                before="",
+                deleted="",
+                inserted="",
+                after="",
                 comment=("Advokat", "Pripomienka k celemu zneniu."),
             ),
             filename="pripomienky.docx",

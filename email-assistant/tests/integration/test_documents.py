@@ -105,9 +105,7 @@ class TestExtractionRun:
 
     def test_pdf_page_count_recorded(self, db_session, synced, local_storage):
         extract_pending(db_session, local_storage)
-        pdf = db_session.scalar(
-            select(DocumentText).where(DocumentText.method == "pypdf")
-        )
+        pdf = db_session.scalar(select(DocumentText).where(DocumentText.method == "pypdf"))
         assert pdf.page_count == 1
 
     def test_running_again_does_nothing(self, db_session, synced, local_storage):
@@ -128,15 +126,11 @@ class TestExtractionRun:
 
     def test_run_is_audited(self, db_session, synced, local_storage):
         extract_pending(db_session, local_storage)
-        entry = db_session.scalar(
-            select(AuditLog).where(AuditLog.action == "documents.extracted")
-        )
+        entry = db_session.scalar(select(AuditLog).where(AuditLog.action == "documents.extracted"))
         assert entry is not None
         assert entry.details["extracted"] == 3
 
-    def test_missing_stored_file_is_recorded_not_raised(
-        self, db_session, synced, local_storage
-    ):
+    def test_missing_stored_file_is_recorded_not_raised(self, db_session, synced, local_storage):
         for blob_key in list(local_storage.root.rglob("*")):
             if blob_key.is_file():
                 blob_key.chmod(0o600)
@@ -169,9 +163,7 @@ class TestExtractionRun:
 
 
 class TestDeduplication:
-    def test_the_same_file_in_two_messages_is_parsed_once(
-        self, db_session, account, local_storage
-    ):
+    def test_the_same_file_in_two_messages_is_parsed_once(self, db_session, account, local_storage):
         identical = make_pdf([CMR_SENTENCE])
         messages = [
             message_with("x1", "Rozhodnutie.pdf", "application/pdf", "a", "t1"),
@@ -188,13 +180,9 @@ class TestDeduplication:
 
         stats = extract_pending(db_session, local_storage)
         assert stats.considered == 1
-        assert db_session.scalar(
-            select(DocumentText.id).where(DocumentText.status == "extracted")
-        )
+        assert db_session.scalar(select(DocumentText.id).where(DocumentText.status == "extracted"))
 
-    def test_both_attachments_resolve_to_the_same_text(
-        self, db_session, account, local_storage
-    ):
+    def test_both_attachments_resolve_to_the_same_text(self, db_session, account, local_storage):
         from app.db.models import Attachment
 
         identical = make_pdf([CMR_SENTENCE])
@@ -221,9 +209,7 @@ class TestDeduplication:
 
 
 class TestDocumentSearch:
-    def test_finds_words_that_appear_only_inside_the_pdf(
-        self, db_session, synced, local_storage
-    ):
+    def test_finds_words_that_appear_only_inside_the_pdf(self, db_session, synced, local_storage):
         extract_pending(db_session, local_storage)
         hits, total = search_documents(db_session, synced.id, "CMR duplicitne")
         assert total == 1

@@ -142,9 +142,11 @@ class TestAutomaticTier:
 
     def test_an_automatic_action_is_still_recorded(self, db_session, account, gmail):
         action = propose_and_maybe_execute(
-            db_session, account,
+            db_session,
+            account,
             request_for(ActionType.LABEL_ADD, payload={"labels": ["AI/X"]}),
-            gmail=gmail, settings=settings(),
+            gmail=gmail,
+            settings=settings(),
         )
         actions = {
             e.action
@@ -159,7 +161,10 @@ class TestAutomaticTier:
 class TestApprovalTier:
     def test_trash_waits_and_touches_nothing(self, db_session, account, gmail):
         action = propose_and_maybe_execute(
-            db_session, account, request_for(ActionType.TRASH), gmail=gmail,
+            db_session,
+            account,
+            request_for(ActionType.TRASH),
+            gmail=gmail,
             settings=settings(),
         )
         assert action.status == ActionStatus.PENDING.value
@@ -197,7 +202,8 @@ class TestApprovalTier:
 
     def test_send_requires_a_draft_id(self, db_session, account, gmail):
         action = propose(
-            db_session, account,
+            db_session,
+            account,
             request_for(ActionType.SEND, gmail_target_id=None, payload={}),
             settings(),
         )
@@ -223,24 +229,25 @@ class TestApprovalTier:
 
 class TestSystemLabelGuard:
     @pytest.mark.parametrize("label", ["TRASH", "INBOX", "SPAM", "trash"])
-    def test_a_label_action_cannot_reach_a_system_label(
-        self, db_session, account, gmail, label
-    ):
+    def test_a_label_action_cannot_reach_a_system_label(self, db_session, account, gmail, label):
         """Otherwise 'add a label' would be an unaudited trash button."""
         action = propose_and_maybe_execute(
-            db_session, account,
+            db_session,
+            account,
             request_for(ActionType.LABEL_ADD, payload={"labels": [label]}),
-            gmail=gmail, settings=settings(),
+            gmail=gmail,
+            settings=settings(),
         )
         assert action.status == ActionStatus.FAILED.value
         assert "system label" in action.error
         assert not gmail.called("modify_labels")
 
-    def test_archive_may_touch_inbox_through_its_own_operation(
-        self, db_session, account, gmail
-    ):
+    def test_archive_may_touch_inbox_through_its_own_operation(self, db_session, account, gmail):
         action = propose_and_maybe_execute(
-            db_session, account, request_for(ActionType.ARCHIVE), gmail=gmail,
+            db_session,
+            account,
+            request_for(ActionType.ARCHIVE),
+            gmail=gmail,
             settings=settings(gmail_auto_archive=True),
         )
         assert action.status == ActionStatus.EXECUTED.value
@@ -274,8 +281,10 @@ class TestFailureHandling:
 
     def test_an_action_without_a_target_fails_cleanly(self, db_session, account, gmail):
         action = propose(
-            db_session, account,
-            request_for(ActionType.TRASH, gmail_target_id=None), settings(),
+            db_session,
+            account,
+            request_for(ActionType.TRASH, gmail_target_id=None),
+            settings(),
         )
         approve(db_session, action.id)
         result = execute(db_session, action, gmail, settings())
@@ -297,9 +306,7 @@ class TestQueue:
         reject(db_session, action.id)
         assert action.id in {a.id for a in history(db_session)}
 
-    def test_a_stale_proposal_expires_instead_of_firing_later(
-        self, db_session, account, gmail
-    ):
+    def test_a_stale_proposal_expires_instead_of_firing_later(self, db_session, account, gmail):
         action = propose(db_session, account, request_for(ActionType.TRASH), settings())
         action.expires_at = datetime.now(UTC) - timedelta(seconds=1)
         db_session.flush()

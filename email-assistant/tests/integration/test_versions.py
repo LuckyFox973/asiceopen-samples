@@ -33,8 +33,9 @@ def message(mid: str, thread: str, filename: str, token: str, hours: int = 0):
         "multipart/mixed",
         [
             text_part("V prilohe znenie.", part_id="0"),
-            attachment_part(filename, mime_type=DOCX_MIME, size=64,
-                            attachment_id=token, part_id="1"),
+            attachment_part(
+                filename, mime_type=DOCX_MIME, size=64, attachment_id=token, part_id="1"
+            ),
         ],
     )
     return gmail_message(
@@ -88,9 +89,7 @@ class TestSeparateBlobs:
         assert all(r.status == "extracted" for r in rows)
 
     def test_the_revised_one_carries_its_changes(self, db_session, two_versions):
-        revised = db_session.scalar(
-            select(DocumentText).where(DocumentText.revision_count > 0)
-        )
+        revised = db_session.scalar(select(DocumentText).where(DocumentText.revision_count > 0))
         assert revised is not None
         assert "2000 EUR" in revised.text
         assert revised.deleted_text == "5000 EUR"
@@ -159,9 +158,7 @@ class TestDiff:
     def test_diff_shows_what_changed(self, db_session, two_versions):
         older, newer = version_history(
             db_session,
-            db_session.scalar(
-                select(Attachment).where(Attachment.filename == "Zmluva.docx")
-            ).id,
+            db_session.scalar(select(Attachment).where(Attachment.filename == "Zmluva.docx")).id,
         ).versions
 
         diff = diff_versions(db_session, older.attachment_id, newer.attachment_id)
@@ -211,9 +208,7 @@ class TestSignals:
         extract_pending(db_session, local_storage)
 
         assert (
-            db_session.scalar(
-                select(AuditLog).where(AuditLog.action == "documents.new_version")
-            )
+            db_session.scalar(select(AuditLog).where(AuditLog.action == "documents.new_version"))
             is None
         )
 
@@ -241,12 +236,8 @@ class TestSearchBehaviour:
         from app.services.search import search_documents
 
         hits, _ = search_documents(db_session, two_versions.id, "5000 EUR")
-        revised = db_session.scalar(
-            select(DocumentText).where(DocumentText.revision_count > 0)
-        )
-        matched_blob_ids = {
-            db_session.get(Attachment, hit.attachment.id).blob_id for hit in hits
-        }
+        revised = db_session.scalar(select(DocumentText).where(DocumentText.revision_count > 0))
+        matched_blob_ids = {db_session.get(Attachment, hit.attachment.id).blob_id for hit in hits}
         assert revised.blob_id not in matched_blob_ids
 
     def test_comment_content_is_searchable(self, db_session, two_versions):

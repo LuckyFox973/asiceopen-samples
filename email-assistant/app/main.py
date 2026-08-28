@@ -47,15 +47,9 @@ def create_app() -> FastAPI:
     # is the one exception and is guarded by its state token instead.
     app.include_router(health.router)
     app.include_router(auth.router, prefix=API_PREFIX)
-    app.include_router(
-        sync.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)]
-    )
-    app.include_router(
-        messages.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)]
-    )
-    app.include_router(
-        matters.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)]
-    )
+    app.include_router(sync.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)])
+    app.include_router(messages.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)])
+    app.include_router(matters.router, prefix=API_PREFIX, dependencies=[Depends(require_api_key)])
     return app
 
 

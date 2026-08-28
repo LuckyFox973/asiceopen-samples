@@ -21,9 +21,7 @@ def make_pdf(pages: list[str]) -> bytes:
 
     kids = " ".join(f"{4 + 2 * i} 0 R" for i in range(page_count))
     objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
-    objects.append(
-        f"<< /Type /Pages /Kids [{kids}] /Count {page_count} >>".encode()
-    )
+    objects.append(f"<< /Type /Pages /Kids [{kids}] /Count {page_count} >>".encode())
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
 
     for text in pages:
@@ -152,14 +150,10 @@ def make_docx_with_revisions(
     with zipfile.ZipFile(io.BytesIO(base)) as archive:
         document_xml = archive.read("word/document.xml").decode()
         others = {
-            name: archive.read(name)
-            for name in archive.namelist()
-            if name != "word/document.xml"
+            name: archive.read(name) for name in archive.namelist() if name != "word/document.xml"
         }
 
-    document_xml = re.sub(
-        r"<w:p\b.*?</w:p>", body, document_xml, count=1, flags=re.DOTALL
-    )
+    document_xml = re.sub(r"<w:p\b.*?</w:p>", body, document_xml, count=1, flags=re.DOTALL)
 
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:

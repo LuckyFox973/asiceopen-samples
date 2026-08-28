@@ -58,8 +58,6 @@ def find_unreferenced_blobs(session: Session) -> list[AttachmentBlob]:
 
     return list(
         session.scalars(
-            select(AttachmentBlob).where(
-                ~exists().where(Attachment.blob_id == AttachmentBlob.id)
-            )
+            select(AttachmentBlob).where(~exists().where(Attachment.blob_id == AttachmentBlob.id))
         ).all()
     )

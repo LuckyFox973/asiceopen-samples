@@ -84,15 +84,11 @@ class TestFinding:
         new = write_client(tmp_path, "client_secret_new.json")
         os.utime(old, (time.time() - 500, time.time() - 500))
 
-        monkeypatch.setattr(
-            "app.services.credentials.SEARCH_DIRS", (str(tmp_path),)
-        )
+        monkeypatch.setattr("app.services.credentials.SEARCH_DIRS", (str(tmp_path),))
         assert find_download() == new
 
     def test_nothing_found_explains_where_to_get_it(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.credentials.SEARCH_DIRS", (str(tmp_path),)
-        )
+        monkeypatch.setattr("app.services.credentials.SEARCH_DIRS", (str(tmp_path),))
         with pytest.raises(CredentialsError, match="Google Auth Platform"):
             find_download()
 
@@ -114,9 +110,7 @@ class TestRedirectChecks:
         assert any("localhost" in p for p in problems)
 
     def test_an_unrelated_uri_is_flagged_with_what_is_configured(self, tmp_path):
-        client = parse(
-            write_client(tmp_path, redirect_uris=["http://localhost:3000/callback"])
-        )
+        client = parse(write_client(tmp_path, redirect_uris=["http://localhost:3000/callback"]))
         problems = check_redirect_uris(client, EXPECTED_URI)
         assert any("http://localhost:3000/callback" in p for p in problems)
 

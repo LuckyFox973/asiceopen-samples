@@ -155,8 +155,9 @@ class FakeGmailActions:
         from app.gmail.actions import ActionOutcome
 
         self._record("archive", message_id=message_id)
-        return ActionOutcome(ok=True, detail=f"archived {message_id}",
-                             undo_hint=f"unarchive({message_id})")
+        return ActionOutcome(
+            ok=True, detail=f"archived {message_id}", undo_hint=f"unarchive({message_id})"
+        )
 
     def unarchive(self, message_id):
         from app.gmail.actions import ActionOutcome
@@ -168,8 +169,9 @@ class FakeGmailActions:
         from app.gmail.actions import ActionOutcome
 
         self._record("trash", message_id=message_id)
-        return ActionOutcome(ok=True, detail=f"trashed {message_id}",
-                             undo_hint=f"untrash({message_id})")
+        return ActionOutcome(
+            ok=True, detail=f"trashed {message_id}", undo_hint=f"untrash({message_id})"
+        )
 
     def untrash(self, message_id):
         from app.gmail.actions import ActionOutcome
@@ -183,15 +185,23 @@ class FakeGmailActions:
         self._record("delete_permanently", message_id=message_id)
         return ActionOutcome(ok=True, detail=f"deleted {message_id}", undo_hint=None)
 
-    def create_draft(self, to, subject, body, thread_id=None, in_reply_to=None,
-                     cc=None, from_address=None):
+    def create_draft(
+        self, to, subject, body, thread_id=None, in_reply_to=None, cc=None, from_address=None
+    ):
         from app.gmail.actions import ActionOutcome
 
         self._next_id += 1
-        self._record("create_draft", to=to, subject=subject, body=body,
-                     thread_id=thread_id, in_reply_to=in_reply_to)
-        return ActionOutcome(ok=True, detail=f"draft for {', '.join(to)}",
-                             data={"draftId": f"draft-{self._next_id}"})
+        self._record(
+            "create_draft",
+            to=to,
+            subject=subject,
+            body=body,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+        )
+        return ActionOutcome(
+            ok=True, detail=f"draft for {', '.join(to)}", data={"draftId": f"draft-{self._next_id}"}
+        )
 
     def send_draft(self, draft_id):
         from app.gmail.actions import ActionOutcome

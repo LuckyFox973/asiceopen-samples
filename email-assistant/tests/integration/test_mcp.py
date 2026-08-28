@@ -65,8 +65,9 @@ def populated(mcp_db, account, local_storage):
                 "multipart/mixed",
                 [
                     text_part("V prilohe rozhodnutie.", part_id="0"),
-                    attachment_part("Rozhodnutie.pdf", size=64,
-                                    attachment_id="tok-pdf", part_id="1"),
+                    attachment_part(
+                        "Rozhodnutie.pdf", size=64, attachment_id="tok-pdf", part_id="1"
+                    ),
                 ],
             ),
         ),
@@ -90,8 +91,13 @@ def populated(mcp_db, account, local_storage):
                 "multipart/mixed",
                 [
                     text_part("Navrh zmluvy.", part_id="0"),
-                    attachment_part("Zmluva.docx", mime_type=DOCX_MIME, size=64,
-                                    attachment_id="tok-v1", part_id="1"),
+                    attachment_part(
+                        "Zmluva.docx",
+                        mime_type=DOCX_MIME,
+                        size=64,
+                        attachment_id="tok-v1",
+                        part_id="1",
+                    ),
                 ],
             ),
         ),
@@ -106,8 +112,13 @@ def populated(mcp_db, account, local_storage):
                 "multipart/mixed",
                 [
                     text_part("Nase pripomienky.", part_id="0"),
-                    attachment_part("Zmluva_v2.docx", mime_type=DOCX_MIME, size=64,
-                                    attachment_id="tok-v2", part_id="1"),
+                    attachment_part(
+                        "Zmluva_v2.docx",
+                        mime_type=DOCX_MIME,
+                        size=64,
+                        attachment_id="tok-v2",
+                        part_id="1",
+                    ),
                 ],
             ),
         ),
@@ -211,9 +222,7 @@ class TestMailTools:
         assert "No messages found" in call("search_emails", query="zzzunlikelyzzz")
 
     def test_get_thread_returns_the_conversation_in_order(self, populated, mcp_db):
-        thread = mcp_db.scalar(
-            select(EmailThread).where(EmailThread.subject.ilike("%Danova%"))
-        )
+        thread = mcp_db.scalar(select(EmailThread).where(EmailThread.subject.ilike("%Danova%")))
         output = call("get_thread", thread_id=str(thread.id))
         assert "2 message(s)" in output
         assert "V prilohe rozhodnutie" in output
@@ -221,15 +230,11 @@ class TestMailTools:
         assert output.index("V prilohe") < output.index("Podklady som prevzal")
 
     def test_get_thread_lists_attachments(self, populated, mcp_db):
-        thread = mcp_db.scalar(
-            select(EmailThread).where(EmailThread.subject.ilike("%Danova%"))
-        )
+        thread = mcp_db.scalar(select(EmailThread).where(EmailThread.subject.ilike("%Danova%")))
         assert "Rozhodnutie.pdf" in call("get_thread", thread_id=str(thread.id))
 
     def test_unknown_thread_is_reported_not_raised(self, populated):
-        assert "No thread" in call(
-            "get_thread", thread_id="00000000-0000-0000-0000-000000000000"
-        )
+        assert "No thread" in call("get_thread", thread_id="00000000-0000-0000-0000-000000000000")
 
     def test_a_malformed_id_is_reported_clearly(self, populated):
         output = call("get_thread", thread_id="not-a-uuid")
@@ -270,9 +275,7 @@ class TestDocumentTools:
         )
 
     def test_versions_are_listed_with_a_diff(self, populated, mcp_db):
-        attachment = mcp_db.scalar(
-            select(Attachment).where(Attachment.filename == "Zmluva.docx")
-        )
+        attachment = mcp_db.scalar(select(Attachment).where(Attachment.filename == "Zmluva.docx"))
         output = call("document_versions", attachment_id=str(attachment.id))
 
         assert "2 version(s)" in output
@@ -281,12 +284,8 @@ class TestDocumentTools:
         assert "+ Zmluvna pokuta je 2000 EUR" in output
 
     def test_diff_between_two_attachments(self, populated, mcp_db):
-        older = mcp_db.scalar(
-            select(Attachment).where(Attachment.filename == "Zmluva.docx")
-        )
-        newer = mcp_db.scalar(
-            select(Attachment).where(Attachment.filename == "Zmluva_v2.docx")
-        )
+        older = mcp_db.scalar(select(Attachment).where(Attachment.filename == "Zmluva.docx"))
+        newer = mcp_db.scalar(select(Attachment).where(Attachment.filename == "Zmluva_v2.docx"))
         output = call(
             "diff_documents",
             older_attachment_id=str(older.id),
@@ -311,9 +310,7 @@ class TestMatterTools:
         assert "thread(s)" in output
 
     def test_unknown_matter_is_reported(self, populated):
-        assert "No matter" in call(
-            "get_matter", matter_id="00000000-0000-0000-0000-000000000000"
-        )
+        assert "No matter" in call("get_matter", matter_id="00000000-0000-0000-0000-000000000000")
 
 
 class TestStateTools:

@@ -67,17 +67,20 @@ def kovaco(db_session):
     """A client with a company domain and one open matter."""
     company = upsert_company(db_session, "KOVACO s.r.o.", domains=["kovaco.sk"])
     client = create_client(db_session, "KOVACO", company=company, reference="KOV")
-    matter = create_matter(
-        db_session, client, "Kasačná sťažnosť KOVACO", reference="KOV-2026-01"
-    )
+    matter = create_matter(db_session, client, "Kasačná sťažnosť KOVACO", reference="KOV-2026-01")
     return client, matter
 
 
 class TestSubjectNormalisation:
     @pytest.mark.parametrize(
         "subject",
-        ["Re: Kasačná sťažnosť", "FWD: Kasačná sťažnosť", "Odp: Kasačná sťažnosť",
-         "RE: RE: Kasačná sťažnosť", "Re[2]: Kasačná sťažnosť"],
+        [
+            "Re: Kasačná sťažnosť",
+            "FWD: Kasačná sťažnosť",
+            "Odp: Kasačná sťažnosť",
+            "RE: RE: Kasačná sťažnosť",
+            "Re[2]: Kasačná sťažnosť",
+        ],
     )
     def test_prefixes_are_stripped(self, subject):
         assert normalise_subject(subject) == "kasačná sťažnosť"
@@ -121,9 +124,7 @@ class TestRules:
         assert suggestion.method == "single_open_matter"
         assert suggestion.is_confident
 
-    def test_two_open_matters_make_the_client_alone_insufficient(
-        self, db_session, account, kovaco
-    ):
+    def test_two_open_matters_make_the_client_alone_insufficient(self, db_session, account, kovaco):
         client, _ = kovaco
         create_matter(db_session, client, "Druhá vec")
         sync(db_session, account, [kovaco_message("m1", "t1", "Nejasná korešpondencia")])
@@ -147,9 +148,7 @@ class TestRules:
             account,
             [kovaco_message("m2", "t2", "Re: Doplnenie dokazov", sender="iny@kovaco.sk")],
         )
-        second = db_session.scalar(
-            select(type(first)).where(type(first).gmail_thread_id == "t2")
-        )
+        second = db_session.scalar(select(type(first)).where(type(first).gmail_thread_id == "t2"))
         suggestion = suggest_for_thread(db_session, second)
         assert suggestion.matter_id == matter.id
         assert suggestion.method in {"sibling_thread", "single_open_matter"}
@@ -265,26 +264,20 @@ class TestReviewQueue:
         assert confirmed.confirmed_at is not None
         assert link.id not in {item.id for item in links_needing_review(db_session)}
 
-    def test_rejecting_removes_the_link_but_keeps_the_record(
-        self, db_session, account, kovaco
-    ):
+    def test_rejecting_removes_the_link_but_keeps_the_record(self, db_session, account, kovaco):
         link = self._weak_link(db_session, account, kovaco)
         link_id = link.id
 
         assert reject_link(db_session, link_id) is True
         assert db_session.get(MatterLink, link_id) is None
-        assert db_session.scalar(
-            select(AuditLog).where(AuditLog.action == "matter.link_rejected")
-        )
+        assert db_session.scalar(select(AuditLog).where(AuditLog.action == "matter.link_rejected"))
 
     def test_rejecting_an_unknown_link_is_false(self, db_session):
         import uuid as uuid_module
 
         assert reject_link(db_session, uuid_module.uuid4()) is False
 
-    def test_a_confirmed_link_is_not_downgraded_by_a_later_guess(
-        self, db_session, account, kovaco
-    ):
+    def test_a_confirmed_link_is_not_downgraded_by_a_later_guess(self, db_session, account, kovaco):
         link = self._weak_link(db_session, account, kovaco)
         confirm_link(db_session, link.id)
 
@@ -381,22 +374,16 @@ class TestApi:
         assert response.status_code == 404
 
     def test_unknown_matter_is_404(self, client):
-        assert client.get(
-            "/api/v1/matters/00000000-0000-0000-0000-000000000000"
-        ).status_code == 404
+        assert client.get("/api/v1/matters/00000000-0000-0000-0000-000000000000").status_code == 404
 
-    def test_assignment_endpoint_dry_run_changes_nothing(
-        self, client, db_session, account, kovaco
-    ):
+    def test_assignment_endpoint_dry_run_changes_nothing(self, client, db_session, account, kovaco):
         sync(db_session, account, [kovaco_message("m1", "t1", "Podklady KOV-2026-01")])
         body = client.post("/api/v1/matters/assign", params={"dry_run": True}).json()
         assert body["linked"] == 1
         assert body["dry_run"] is True
         assert db_session.scalars(select(MatterLink)).all() == []
 
-    def test_assignment_endpoint_files_and_reports(
-        self, client, db_session, account, kovaco
-    ):
+    def test_assignment_endpoint_files_and_reports(self, client, db_session, account, kovaco):
         sync(db_session, account, [kovaco_message("m1", "t1", "Podklady KOV-2026-01")])
         body = client.post("/api/v1/matters/assign").json()
         assert body["linked"] == 1
@@ -417,9 +404,12 @@ class TestApi:
         assert "KOV-2026-01" in body["reason"]
 
     def test_suggestion_for_unknown_thread_is_404(self, client):
-        assert client.get(
-            "/api/v1/matters/suggestions/00000000-0000-0000-0000-000000000000"
-        ).status_code == 404
+        assert (
+            client.get(
+                "/api/v1/matters/suggestions/00000000-0000-0000-0000-000000000000"
+            ).status_code
+            == 404
+        )
 
     def test_review_queue_and_confirm(self, client, db_session, account, kovaco):
         from app.services.matters import link_target
@@ -450,8 +440,12 @@ class TestApi:
         _, matter = kovaco
         sync(db_session, account, [kovaco_message("m1", "t1", "Vec")])
         link = link_target(
-            db_session, matter.id, LinkTarget.THREAD,
-            thread_named(db_session, "Vec").id, confidence=0.5, method="subject_similarity",
+            db_session,
+            matter.id,
+            LinkTarget.THREAD,
+            thread_named(db_session, "Vec").id,
+            confidence=0.5,
+            method="subject_similarity",
         )
 
         assert client.delete(f"/api/v1/matters/links/{link.id}").status_code == 204
