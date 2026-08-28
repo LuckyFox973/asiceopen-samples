@@ -35,11 +35,10 @@ ingest, attachment store and search index are the production ones.
 
 ## 2. Google Cloud project — needs you
 
-> **Follow [GET_STARTED.md](GET_STARTED.md) instead of this section.** It starts
-> from an empty Mac, uses the current Google Auth Platform console layout, and
-> settles the scopes before you open the consent screen — adding one afterwards
-> means re-authorising every mailbox. What follows is the short form, for
-> someone who already has the project running.
+> **Follow [GOOGLE_CLOUD.md](GOOGLE_CLOUD.md) instead of this section.** It uses
+> the current Google Auth Platform console layout and settles the scopes before
+> the consent screen — adding one afterwards means re-authorising every mailbox.
+> What follows is the short form.
 
 These steps require your Google account; I cannot do them for you.
 

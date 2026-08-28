@@ -1,0 +1,147 @@
+# Install it on your Mac
+
+Nothing about Google here — that is [GOOGLE_CLOUD.md](GOOGLE_CLOUD.md), and it
+can be done before or after this. You will need the Client ID and secret from
+it at step 3.
+
+---
+
+## 1. Install everything
+
+Open **Terminal** (⌘-Space, type *Terminal*) and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LuckyFox973/asiceopen-samples/claude/gmail-ai-assistant-system-u72j2z/email-assistant/scripts/bootstrap_macos.sh | bash
+```
+
+It installs Homebrew if you do not have it, then Python, PostgreSQL and the
+project into `~/email-assistant`. It creates the database, generates your
+encryption keys, and loads demo data. It may ask for your Mac password once —
+that is Homebrew.
+
+Run it twice and nothing breaks; every step checks before it acts.
+
+## 2. Check it works
+
+```bash
+cd ~/email-assistant/email-assistant
+./.venv/bin/python -m app.cli find "CMR duplicitne"
+```
+
+That searches *inside* a PDF in the demo data. A result means everything works.
+
+> **Where things are now.** The project is at
+> `~/email-assistant/email-assistant`. Its settings live in `.env` in that
+> folder. Open it with `open -e .env`.
+
+## 3. Add your Google credentials
+
+```bash
+cd ~/email-assistant/email-assistant
+open -e .env
+```
+
+Fill in the two values from GOOGLE_CLOUD.md step 5, and set the permissions to
+match what you configured there:
+
+```
+GOOGLE_CLIENT_ID=1234567890-abcdefg.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-...
+GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
+
+GMAIL_WRITE_ENABLED=true
+GMAIL_ALLOW_PERMANENT_DELETE=false
+GMAIL_AUTO_ARCHIVE=false
+
+SYNC_START_DATE=2026-01-01
+```
+
+`SYNC_START_DATE` is a hard floor — nothing older is ever fetched. Start recent;
+you can lower it later.
+
+Save, then confirm the application will ask Google for exactly what you
+configured:
+
+```bash
+./.venv/bin/python -m app.cli check
+```
+
+It prints the scope list one per line. **If it disagrees with what you saved in
+Data Access, fix it now** — after authorising, fixing it means authorising again.
+
+## 4. Connect the mailbox
+
+Two Terminal windows.
+
+**First**, leave this running:
+
+```bash
+cd ~/email-assistant/email-assistant
+./.venv/bin/uvicorn app.main:app --port 8000
+```
+
+**Second**:
+
+```bash
+cd ~/email-assistant/email-assistant
+./.venv/bin/python -m app.cli auth-url
+```
+
+Open the printed URL, sign in with the mailbox you want, approve. Google shows
+exactly the scopes you configured — read that screen.
+
+## 5. Pull the mail in
+
+```bash
+./.venv/bin/python -m app.cli accounts
+./.venv/bin/python -m app.cli sync you@yourdomain.sk --mode initial
+./.venv/bin/python -m app.cli extract
+```
+
+The first sync stops after a couple of thousand messages and reports `partial`.
+Run the same `sync` command again to continue. Repeat until it says `completed`.
+
+Then look at what it has:
+
+```bash
+./.venv/bin/python -m app.cli stats
+./.venv/bin/python -m app.cli search "danova kontrola"
+```
+
+## 6. Connect Claude
+
+```bash
+claude mcp add email-assistant \
+  -- ~/email-assistant/email-assistant/.venv/bin/python -m app.mcp.server
+```
+
+No API key, no per-token cost. See [MCP.md](MCP.md), including how to reach it
+from a phone.
+
+## 7. Keep it synchronising
+
+```bash
+cd ~/email-assistant/email-assistant
+./.venv/bin/python -m app.cli daemon
+```
+
+Syncs every 15 minutes, extracts new documents, backs up once a day. Close the
+window and it stops — the trade-off of running on your own Mac.
+
+---
+
+## If something goes wrong
+
+| What you see | What it means |
+|---|---|
+| `command not found: brew` | Close Terminal, open a new one, run the installer again. |
+| `connection refused` on 5432 | PostgreSQL stopped. `brew services start postgresql@16` |
+| `redirect_uri_mismatch` | The URI in `.env` is not character-for-character one of the two you added in Google. |
+| `insufficient authentication scopes` | You enabled writes after authorising. Run `auth-url` again. |
+| Migrations fail | `./.venv/bin/alembic upgrade head` to see the real error. |
+
+## Removing it
+
+Deleting `~/email-assistant` removes the code and the virtualenv. The databases
+are separate: `dropdb email_assistant email_assistant_test`. Revoke Google
+access at <https://myaccount.google.com/connections>.

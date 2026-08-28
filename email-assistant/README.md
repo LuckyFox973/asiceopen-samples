@@ -73,9 +73,9 @@ make run              # API on http://localhost:8000  (docs at /docs)
 ```
 
 Connecting a real mailbox needs a Google Cloud project and an OAuth client.
-**Follow [`docs/GET_STARTED.md`](docs/GET_STARTED.md)** — it starts from an
-empty Mac and settles the OAuth permissions before you touch the consent
-screen, because adding one later means re-authorising every mailbox.
+The Google side is [`docs/GOOGLE_CLOUD.md`](docs/GOOGLE_CLOUD.md) — ten
+minutes in a browser, nothing installed needed. The application side is
+[`docs/INSTALL_MAC.md`](docs/INSTALL_MAC.md).
 
 ## Command line
 
@@ -145,7 +145,8 @@ not be reachable from the local network.
 - [`docs/BACKUP.md`](docs/BACKUP.md) — what is backed up, encryption, and how to restore
 - [`docs/MATTERS.md`](docs/MATTERS.md) — how conversations get filed, and why it never guesses hard
 - [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) — extraction, tracked changes, and document versions
-- [`docs/GET_STARTED.md`](docs/GET_STARTED.md) — **from an empty Mac to a synced mailbox, start here**
+- [`docs/GOOGLE_CLOUD.md`](docs/GOOGLE_CLOUD.md) — **the Gmail API side: scopes and OAuth client**
+- [`docs/INSTALL_MAC.md`](docs/INSTALL_MAC.md) — **the application side: install and connect a mailbox**
 - [`docs/ACTIONS.md`](docs/ACTIONS.md) — what the assistant may do to the mailbox, and what it must ask first
 - [`docs/MCP.md`](docs/MCP.md) — using it from Claude Code, Desktop, or your phone
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phases, what is done and what comes next
