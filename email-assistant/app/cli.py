@@ -19,7 +19,7 @@ import re
 import socket
 import sys
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from urllib.parse import urlparse
 
 from sqlalchemy import func, select
@@ -457,7 +457,9 @@ def cmd_daemon(args: argparse.Namespace) -> int:
     return 1 if stats.errors else 0
 
 
-def _extract_batch(args: argparse.Namespace) -> tuple[dict[str, int], int, list[str]]:
+def _extract_batch(
+    args: argparse.Namespace, since: datetime | None
+) -> tuple[dict[str, int], int, list[str]]:
     """One batch, committed on its own. Returns its counts, what is left, and errors."""
     from app.services.documents import extract_pending, extraction_summary
     from app.services.storage import build_storage
@@ -468,6 +470,7 @@ def _extract_batch(args: argparse.Namespace) -> tuple[dict[str, int], int, list[
             build_storage(),
             limit=args.limit,
             retry_failed=args.retry_failed,
+            since=since,
         )
         counts = {
             "considered": stats.considered,
@@ -481,7 +484,9 @@ def _extract_batch(args: argparse.Namespace) -> tuple[dict[str, int], int, list[
             "failed": stats.failed,
         }
         session.flush()
-        remaining = extraction_summary(session, retry_failed=args.retry_failed)["pending"]
+        remaining = extraction_summary(session, retry_failed=args.retry_failed, since=since)[
+            "pending"
+        ]
         return counts, remaining, list(stats.errors)
 
 
@@ -531,12 +536,20 @@ def cmd_extract(args: argparse.Namespace) -> int:
     if args.problems:
         return _report_unreadable()
 
+    # A retry re-reads files that may well land on a retryable status again —
+    # a scan is still a scan.  What settles them is having been looked at
+    # during this run, so the run needs a starting mark.
+    since = datetime.now(UTC) if args.retry_failed else None
+
     with session_scope() as session:
-        remaining = extraction_summary(session, retry_failed=args.retry_failed)["pending"]
+        remaining = extraction_summary(session, retry_failed=args.retry_failed, since=since)[
+            "pending"
+        ]
     if not remaining:
         print("Nothing to extract — every stored file already has a result.")
         return 0
 
+    total = remaining
     totals = dict.fromkeys(
         (
             "considered",
@@ -554,13 +567,13 @@ def cmd_extract(args: argparse.Namespace) -> int:
     seen_errors: list[str] = []
 
     while remaining:
-        counts, still_pending, errors = _extract_batch(args)
+        counts, still_pending, errors = _extract_batch(args, since)
         for key, value in counts.items():
             totals[key] += value
         seen_errors.extend(errors)
 
         print(
-            f"{totals['considered']} of {totals['considered'] + still_pending} file(s) done "
+            f"{totals['considered']} of {total} file(s) done "
             f"— {totals['extracted']} extracted ({totals['characters']:,} chars)"
         )
 

@@ -47,7 +47,23 @@ def configure_logging() -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+    _quieten_parser_libraries(level)
     _configured = True
+
+
+# Parsers that warn per-file about input we already handle.  A batch over a
+# real mailbox printed "invalid pdf header" forty times in a row, which reads
+# as a fault and is not one — every outcome is recorded on the document row
+# and reported by `extract --problems`.  Errors still come through.
+NOISY_LIBRARIES = ("pypdf", "openpyxl")
+
+
+def _quieten_parser_libraries(level: int) -> None:
+    # Never quieter than the configured level, so LOG_LEVEL=DEBUG still shows
+    # everything these libraries have to say.
+    floor = level if level < logging.INFO else logging.ERROR
+    for name in NOISY_LIBRARIES:
+        logging.getLogger(name).setLevel(floor)
 
 
 def _rename_level_to_severity(_logger, _name, event_dict):  # type: ignore[no-untyped-def]

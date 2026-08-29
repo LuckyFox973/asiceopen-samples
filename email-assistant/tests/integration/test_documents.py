@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -426,3 +426,48 @@ class TestRetryAfterNewFormats:
     def test_a_readable_file_is_not_re_read_by_a_retry(self, db_session, synced, local_storage):
         extract_pending(db_session, local_storage)
         assert extract_pending(db_session, local_storage, retry_failed=True).considered == 0
+
+
+class TestRetryConverges:
+    """A retry run must finish even when nothing it reads becomes readable."""
+
+    @pytest.fixture
+    def only_scans(self, db_session, account, local_storage):
+        """Three files that stay `needs_ocr` however often they are read."""
+        documents = {f"tok-{i}": make_scanned_pdf() + f"%{i}".encode() for i in range(3)}
+        messages = [
+            message_with(f"s{i}", f"Sken{i}.pdf", "application/pdf", f"tok-{i}", f"s{i}")
+            for i in range(3)
+        ]
+        SyncEngine(
+            session=db_session,
+            account=account,
+            client=FakeGmailClient(messages, attachments=documents),
+            storage=local_storage,
+            default_start_date=date(2025, 1, 1),
+            download_attachments=True,
+        ).initial_sync()
+        extract_pending(db_session, local_storage)
+        return account
+
+    def test_without_a_run_mark_they_never_settle(self, db_session, only_scans):
+        """Status alone cannot end the loop: a scan re-read is still a scan."""
+        assert extraction_summary(db_session, retry_failed=True)["pending"] == 3
+
+    def test_files_read_during_this_run_count_as_settled(
+        self, db_session, only_scans, local_storage
+    ):
+        started = datetime.now(UTC)
+        stats = extract_pending(db_session, local_storage, retry_failed=True, since=started)
+        assert stats.considered == 3
+        assert stats.needs_ocr == 3
+
+        remaining = extraction_summary(db_session, retry_failed=True, since=started)["pending"]
+        assert remaining == 0, "the loop would otherwise report them as unprocessable"
+
+    def test_a_file_untouched_by_this_run_is_still_outstanding(
+        self, db_session, only_scans, local_storage
+    ):
+        started = datetime.now(UTC)
+        extract_pending(db_session, local_storage, limit=1, retry_failed=True, since=started)
+        assert extraction_summary(db_session, retry_failed=True, since=started)["pending"] == 2

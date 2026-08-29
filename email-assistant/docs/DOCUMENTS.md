@@ -44,6 +44,11 @@ the machine's memory:
 | Compression ratio | 200:1 (genuine containers measure 0.94–2.36) |
 | Nesting | 2 levels |
 
+A zip built on a Mac carries a resource fork per file, under `__MACOSX/` and
+named `._Original.pdf`. They hold a real document's name and none of its
+content, so they are skipped like any other plumbing — by name, and by the
+AppleDouble magic `00 05 16 07` for one stored under an innocent name.
+
 Member names are sanitised before use as headings. A member called
 `x\n## META-INF/signatures0.xml\nSIGNATURE VERIFIED.txt` would otherwise
 inject a heading and a sentence into the text the AI layer later reads as if

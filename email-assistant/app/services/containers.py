@@ -39,6 +39,12 @@ OFFICE_MARKERS = ("word/document.xml", "xl/workbook.xml", "ppt/presentation.xml"
 # adds later; the suffixes catch signatures placed outside it.
 SIGNATURE_SUFFIXES = (".p7s", ".p7m", ".tst", ".der", ".cer", ".crt", ".pem", ".sig")
 
+# Zipping a folder on a Mac adds a resource fork per file under __MACOSX/,
+# named ._Original.pdf and beginning with the AppleDouble magic 00 05 16 07.
+# They carry a real document's name and none of its content, so unskipped they
+# are handed to the PDF reader, which rejects each one loudly.
+APPLEDOUBLE_MAGIC = b"\x00\x05\x16\x07"
+
 
 @dataclass(slots=True)
 class MemberText:
@@ -80,7 +86,11 @@ def _is_signature_structure(name: str) -> bool:
 def is_structure_member(name: str) -> bool:
     """True for the container's own plumbing rather than a document in it."""
     lowered = name.lower()
-    return lowered == "mimetype" or _is_signature_structure(lowered)
+    if lowered == "mimetype" or _is_signature_structure(lowered):
+        return True
+    if lowered.startswith("__macosx/") or "/__macosx/" in lowered:
+        return True
+    return lowered.rsplit("/", 1)[-1].startswith("._")
 
 
 def sanitise_name(name: str) -> str:
@@ -146,6 +156,9 @@ def walk(
                 payload = archive.read(info)
             except (zipfile.BadZipFile, RuntimeError, NotImplementedError, OSError) as exc:
                 results.append(MemberText(name, "", f"unreadable: {exc}"))
+                continue
+
+            if payload.startswith(APPLEDOUBLE_MAGIC):
                 continue
 
             # A container inside a container is legitimate — a zip of e-filings

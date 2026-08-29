@@ -155,6 +155,42 @@ class TestHostileArchives:
         }
 
 
+class TestMacOsMetadata:
+    """Zipping a folder on a Mac adds a resource fork beside every file."""
+
+    MAC_FORK = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X" + b"\x00" * 60
+
+    def _mac_zip(self):
+        return make_zip(
+            {
+                "Rozsudok.pdf": make_pdf(["Sud rozhodol v prospech zalobcu"]),
+                "__MACOSX/._Rozsudok.pdf": self.MAC_FORK,
+                "._Rozsudok.pdf": self.MAC_FORK,
+            }
+        )
+
+    def test_resource_forks_are_not_read(self):
+        kept = [member.name for member in walk(self._mac_zip(), _text_member)]
+        assert kept == ["Rozsudok.pdf"]
+
+    def test_the_real_document_still_comes_through(self):
+        result = extract(self._mac_zip(), mime_type="application/zip", filename="a.zip")
+        assert "Sud rozhodol v prospech zalobcu" in result.text
+
+    @pytest.mark.parametrize(
+        "name", ["__MACOSX/._x.pdf", "sub/__MACOSX/._x.pdf", "._x.pdf", "dir/._x.pdf"]
+    )
+    def test_the_name_alone_identifies_them(self, name):
+        assert is_structure_member(name) is True
+
+    def test_a_fork_stored_under_an_innocent_name_is_caught_by_its_magic(self):
+        """Belt and braces: the AppleDouble header gives it away."""
+        kept = [
+            member.name for member in walk(make_zip({"Rozsudok.pdf": self.MAC_FORK}), _text_member)
+        ]
+        assert kept == []
+
+
 class TestOfficeFilesAreNotContainers:
     def test_a_docx_still_goes_to_the_word_reader(self):
         """A .docx is a ZIP; it must not be walked as an archive."""
