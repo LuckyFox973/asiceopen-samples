@@ -23,9 +23,6 @@ from app.services.versions import normalise_filename
 
 log = get_logger(__name__)
 
-# Statuses worth trying again: a transient failure, or OCR arriving later.
-RETRYABLE = {ExtractionStatus.FAILED.value}
-
 # Statuses that mean the file's contents are not searchable.
 UNREADABLE = (
     ExtractionStatus.NEEDS_OCR.value,
@@ -33,6 +30,13 @@ UNREADABLE = (
     ExtractionStatus.UNSUPPORTED.value,
     ExtractionStatus.FAILED.value,
 )
+
+# Statuses worth reading again on request.  Everything that produced no text
+# qualifies, not merely what crashed: "unsupported" is a statement about the
+# extractor of the day, and the day a format is added every file previously
+# refused for it is readable.  `empty` is excluded — that file was read fine
+# and genuinely has nothing in it.
+RETRYABLE = {*UNREADABLE, ExtractionStatus.NOT_A_DOCUMENT.value}
 
 
 @dataclass
@@ -68,20 +72,27 @@ class ExtractionRunStats:
                 self.failed += 1
 
 
+def _already_done(retry_failed: bool):
+    """The single definition of "this blob has been dealt with".
+
+    Shared deliberately: when the count and the query disagreed about it, the
+    command reported nothing to do and exited before running.
+    """
+    if retry_failed:
+        return exists().where(
+            DocumentText.blob_id == AttachmentBlob.id,
+            DocumentText.status.notin_(sorted(RETRYABLE)),
+        )
+    return exists().where(DocumentText.blob_id == AttachmentBlob.id)
+
+
 def pending_blobs(
     session: Session, limit: int | None = None, retry_failed: bool = False
 ) -> list[AttachmentBlob]:
     """Stored files with no usable extraction result yet."""
-    already_done = exists().where(DocumentText.blob_id == AttachmentBlob.id)
-    if retry_failed:
-        already_done = exists().where(
-            DocumentText.blob_id == AttachmentBlob.id,
-            DocumentText.status.notin_(list(RETRYABLE)),
-        )
-
     stmt = (
         select(AttachmentBlob)
-        .where(~already_done)
+        .where(~_already_done(retry_failed))
         .order_by(AttachmentBlob.first_seen_at.desc().nullslast())
     )
     if limit:
@@ -307,8 +318,14 @@ def extract_pending(
     return stats
 
 
-def extraction_summary(session: Session) -> dict[str, int]:
-    """Counts by status, plus how many stored files still have no result."""
+def extraction_summary(session: Session, retry_failed: bool = False) -> dict[str, int]:
+    """Counts by status, plus how many stored files are still to be read.
+
+    *retry_failed* must match what the caller intends to run.  A count of
+    files with no row at all would say "nothing to do" to a caller that was
+    about to re-read every unsupported file — which is exactly how a rebuilt
+    extractor silently did nothing.
+    """
     counts = dict(
         session.execute(
             select(DocumentText.status, func.count(DocumentText.id)).group_by(DocumentText.status)
@@ -316,11 +333,7 @@ def extraction_summary(session: Session) -> dict[str, int]:
     )
     summary = {status: int(counts.get(status, 0)) for status in (s.value for s in ExtractionStatus)}
     summary["pending"] = (
-        session.scalar(
-            select(func.count(AttachmentBlob.id)).where(
-                ~exists().where(DocumentText.blob_id == AttachmentBlob.id)
-            )
-        )
+        session.scalar(select(func.count(AttachmentBlob.id)).where(~_already_done(retry_failed)))
         or 0
     )
     return summary

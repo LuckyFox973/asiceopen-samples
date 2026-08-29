@@ -28,6 +28,7 @@ from tests.fixtures.documents import (
     make_pdf,
     make_scanned_pdf,
     make_xlsx,
+    make_zip,
 )
 from tests.fixtures.fake_gmail import FakeGmailClient
 
@@ -367,3 +368,61 @@ class TestUnreadableReport:
         assert [group.copies for group in groups] == sorted(
             (group.copies for group in groups), reverse=True
         )
+
+
+class TestRetryAfterNewFormats:
+    """The day a format is added, every file previously refused for it is
+    readable — and nothing re-reads them unless asked."""
+
+    @pytest.fixture
+    def refused(self, db_session, account, local_storage):
+        """A stored file recorded as unsupported by an earlier extractor."""
+        from app.db.models import AttachmentBlob, DocumentText
+
+        messages = [message_with("r1", "Podanie.zip", "application/zip", "tok-zip", "r1")]
+        SyncEngine(
+            session=db_session,
+            account=account,
+            client=FakeGmailClient(
+                messages,
+                attachments={"tok-zip": make_zip({"Rozsudok.txt": b"Sud rozhodol"})},
+            ),
+            storage=local_storage,
+            default_start_date=date(2025, 1, 1),
+            download_attachments=True,
+        ).initial_sync()
+
+        blob = db_session.scalars(select(AttachmentBlob)).first()
+        db_session.add(
+            DocumentText(
+                blob_id=blob.id,
+                status="unsupported",
+                method="none",
+                char_count=0,
+                error="No extractor for application/zip",
+            )
+        )
+        db_session.flush()
+        return blob
+
+    def test_an_ordinary_run_leaves_it_alone(self, db_session, refused, local_storage):
+        """A finished file is not re-read on every pass."""
+        assert extraction_summary(db_session)["pending"] == 0
+        assert extract_pending(db_session, local_storage).considered == 0
+
+    def test_a_retry_run_counts_it_as_work_to_do(self, db_session, refused):
+        """The count and the query must agree, or the command exits early."""
+        assert extraction_summary(db_session, retry_failed=True)["pending"] == 1
+        assert len(pending_blobs(db_session, retry_failed=True)) == 1
+
+    def test_a_retry_run_reads_it_with_the_new_extractor(self, db_session, refused, local_storage):
+        stats = extract_pending(db_session, local_storage, retry_failed=True)
+        assert stats.extracted == 1
+
+        document = db_session.scalar(select(DocumentText).where(DocumentText.blob_id == refused.id))
+        assert document.status == "extracted"
+        assert "Sud rozhodol" in document.text
+
+    def test_a_readable_file_is_not_re_read_by_a_retry(self, db_session, synced, local_storage):
+        extract_pending(db_session, local_storage)
+        assert extract_pending(db_session, local_storage, retry_failed=True).considered == 0

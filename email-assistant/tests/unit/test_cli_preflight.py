@@ -172,7 +172,7 @@ class TestExtractLoop:
         )
         monkeypatch.setattr(
             "app.services.documents.extraction_summary",
-            lambda _session: {"pending": pending_at_start},
+            lambda _session, retry_failed=False: {"pending": pending_at_start},
         )
 
         def fake_batch(_args):

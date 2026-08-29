@@ -481,7 +481,8 @@ def _extract_batch(args: argparse.Namespace) -> tuple[dict[str, int], int, list[
             "failed": stats.failed,
         }
         session.flush()
-        return counts, extraction_summary(session)["pending"], list(stats.errors)
+        remaining = extraction_summary(session, retry_failed=args.retry_failed)["pending"]
+        return counts, remaining, list(stats.errors)
 
 
 def _report_unreadable() -> int:
@@ -531,7 +532,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
         return _report_unreadable()
 
     with session_scope() as session:
-        remaining = extraction_summary(session)["pending"]
+        remaining = extraction_summary(session, retry_failed=args.retry_failed)["pending"]
     if not remaining:
         print("Nothing to extract — every stored file already has a result.")
         return 0
@@ -1023,7 +1024,9 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser = sub.add_parser("extract", help="pull text out of stored attachments")
     extract_parser.add_argument("--limit", type=int, default=100)
     extract_parser.add_argument(
-        "--retry-failed", action="store_true", help="try previously failed files again"
+        "--retry-failed",
+        action="store_true",
+        help="read again every file that produced no text — use after new formats are added",
     )
     extract_parser.add_argument(
         "--summary", action="store_true", help="show counts instead of extracting"
