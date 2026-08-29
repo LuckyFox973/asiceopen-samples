@@ -19,6 +19,7 @@ import re
 import socket
 import sys
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from urllib.parse import urlparse
 
@@ -467,8 +468,38 @@ def cmd_daemon(args: argparse.Namespace) -> int:
     return 1 if stats.errors else 0
 
 
+@dataclass(frozen=True)
+class ExtractionScope:
+    """Which stored files a run is about, decided once.
+
+    Three places need this — the check before starting, the batch itself, and
+    the count of what is left — and when one of them disagreed the command
+    reported nothing to do and exited without running.
+    """
+
+    retry_failed: bool = False
+    redo: bool = False
+    since: datetime | None = None
+
+    @classmethod
+    def of(cls, args: argparse.Namespace) -> ExtractionScope:
+        rereading = bool(args.retry_failed or args.redo)
+        return cls(
+            # A redo re-reads everything, which includes everything a retry
+            # would have.
+            retry_failed=rereading,
+            redo=bool(args.redo),
+            # A re-read may land on the same status it started from, so what
+            # settles a file is having been looked at during this run.
+            since=datetime.now(UTC) if rereading else None,
+        )
+
+    def as_kwargs(self) -> dict:
+        return {"retry_failed": self.retry_failed, "redo": self.redo, "since": self.since}
+
+
 def _extract_batch(
-    args: argparse.Namespace, since: datetime | None
+    args: argparse.Namespace, scope: ExtractionScope
 ) -> tuple[dict[str, int], int, list[str]]:
     """One batch, committed on its own. Returns its counts, what is left, and errors."""
     from app.services.documents import extract_pending, extraction_summary
@@ -479,9 +510,7 @@ def _extract_batch(
             session,
             build_storage(),
             limit=args.limit,
-            retry_failed=args.retry_failed or args.redo,
-            redo=args.redo,
-            since=since,
+            **scope.as_kwargs(),
         )
         counts = {
             "considered": stats.considered,
@@ -495,12 +524,7 @@ def _extract_batch(
             "failed": stats.failed,
         }
         session.flush()
-        remaining = extraction_summary(
-            session,
-            retry_failed=args.retry_failed or args.redo,
-            redo=args.redo,
-            since=since,
-        )["pending"]
+        remaining = extraction_summary(session, **scope.as_kwargs())["pending"]
         return counts, remaining, list(stats.errors)
 
 
@@ -550,15 +574,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
     if args.problems:
         return _report_unreadable()
 
-    # A retry re-reads files that may well land on a retryable status again —
-    # a scan is still a scan.  What settles them is having been looked at
-    # during this run, so the run needs a starting mark.
-    since = datetime.now(UTC) if (args.retry_failed or args.redo) else None
+    scope = ExtractionScope.of(args)
 
     with session_scope() as session:
-        remaining = extraction_summary(session, retry_failed=args.retry_failed, since=since)[
-            "pending"
-        ]
+        remaining = extraction_summary(session, **scope.as_kwargs())["pending"]
     if not remaining:
         print("Nothing to extract — every stored file already has a result.")
         return 0
@@ -581,7 +600,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
     seen_errors: list[str] = []
 
     while remaining:
-        counts, still_pending, errors = _extract_batch(args, since)
+        counts, still_pending, errors = _extract_batch(args, scope)
         for key, value in counts.items():
             totals[key] += value
         seen_errors.extend(errors)

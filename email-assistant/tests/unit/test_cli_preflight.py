@@ -172,10 +172,12 @@ class TestExtractLoop:
         )
         monkeypatch.setattr(
             "app.services.documents.extraction_summary",
-            lambda _session, retry_failed=False, since=None: {"pending": pending_at_start},
+            # **kwargs on purpose: a stub pinned to today's arguments has
+            # broken this suite three times for no defect in the code.
+            lambda _session, **_kwargs: {"pending": pending_at_start},
         )
 
-        def fake_batch(_args, _since=None):
+        def fake_batch(_args, *_rest, **_kwargs):
             calls.append(1)
             return outcomes[len(calls) - 1]
 
@@ -251,3 +253,59 @@ class TestDatabaseDownMessage:
         monkeypatch.setattr(cli, "cmd_stats", interrupt)
         assert cli.main(["stats"]) == 130
         assert "Nothing already stored is lost" in capsys.readouterr().out
+
+
+class TestExtractionScope:
+    """One decision, made once. Three places used to compute it separately, and
+    when the check before starting disagreed with the batch, `--redo` printed
+    "nothing to extract" and did nothing."""
+
+    @staticmethod
+    def _scope(*flags):
+        return cli.ExtractionScope.of(cli.build_parser().parse_args(["extract", *flags]))
+
+    def test_a_plain_run_reads_only_what_has_no_result(self):
+        scope = self._scope()
+        assert scope.retry_failed is False
+        assert scope.redo is False
+        assert scope.since is None
+
+    def test_a_retry_marks_the_run(self):
+        scope = self._scope("--retry-failed")
+        assert scope.retry_failed is True
+        assert scope.redo is False
+        assert scope.since is not None
+
+    def test_a_redo_implies_a_retry(self):
+        """Re-reading everything includes everything a retry would have."""
+        scope = self._scope("--redo")
+        assert scope.redo is True
+        assert scope.retry_failed is True
+        assert scope.since is not None
+
+    def test_every_caller_gets_the_same_three_values(self):
+        """as_kwargs is what the query sees; a flag missing here is invisible."""
+        scope = self._scope("--redo")
+        assert scope.as_kwargs() == {
+            "retry_failed": True,
+            "redo": True,
+            "since": scope.since,
+        }
+
+    def test_the_flags_reach_the_query(self, monkeypatch):
+        """The failure this class exists for: the pre-check dropped --redo."""
+        seen: list[dict] = []
+
+        def spy(_session, **kwargs):
+            seen.append(kwargs)
+            return {"pending": 0}
+
+        monkeypatch.setattr("app.services.documents.extraction_summary", spy)
+        monkeypatch.setattr(
+            cli, "session_scope", lambda: contextlib.nullcontext(object()), raising=True
+        )
+        cli.cmd_extract(cli.build_parser().parse_args(["extract", "--redo"]))
+
+        assert seen, "the summary was never consulted"
+        assert seen[0]["redo"] is True
+        assert seen[0]["since"] is not None
