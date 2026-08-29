@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from app.services.extraction import (
@@ -201,3 +203,41 @@ class TestLimits:
 )
 def test_detect_kind(mime, filename, expected):
     assert detect_kind(mime, filename, b"") == expected
+
+
+class TestEncryptedPdf:
+    """pypdf reports a wrong password by return value, not by raising."""
+
+    @staticmethod
+    def _locked_pdf(password: str = "s3cret") -> bytes:
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.encrypt(password)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        return buffer.getvalue()
+
+    def test_a_locked_pdf_is_reported_as_encrypted(self):
+        result = extract(self._locked_pdf(), mime_type="application/pdf", filename="Faktura.pdf")
+        assert result.status is ExtractionStatus.ENCRYPTED
+
+    def test_the_message_says_a_password_is_needed(self):
+        """`File has not been decrypted` told the owner nothing actionable."""
+        result = extract(self._locked_pdf(), mime_type="application/pdf", filename="Faktura.pdf")
+        assert "password" in (result.error or "").lower()
+        assert "not been decrypted" not in (result.error or "")
+
+    def test_an_empty_user_password_still_opens(self):
+        """ "Protected" documents often carry no user password at all."""
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.encrypt(user_password="", owner_password="owner-only")
+        buffer = io.BytesIO()
+        writer.write(buffer)
+
+        result = extract(buffer.getvalue(), mime_type="application/pdf", filename="Open.pdf")
+        assert result.status is not ExtractionStatus.ENCRYPTED

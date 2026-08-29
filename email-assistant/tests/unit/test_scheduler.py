@@ -10,6 +10,8 @@ import pytest
 
 from app.core.config import Settings
 from app.services import scheduler as scheduler_module
+from app.services.documents import ExtractionRunStats
+from app.services.extraction import ExtractionStatus
 from app.services.scheduler import Scheduler
 
 BRATISLAVA_0200 = datetime(2026, 8, 27, 0, 0, tzinfo=UTC)  # 02:00 local (CEST)
@@ -73,7 +75,12 @@ def fake_world(monkeypatch):
         if state.extract_error:
             raise RuntimeError("storage unreadable")
         state.extracted += 1
-        return SimpleNamespace(considered=2, extracted=2, needs_ocr=0)
+        # The real dataclass, not a stand-in: a stub carrying only the fields
+        # today's caller reads breaks the moment the caller reads one more.
+        stats = ExtractionRunStats()
+        stats.record(ExtractionStatus.EXTRACTED, chars=100)
+        stats.record(ExtractionStatus.EXTRACTED, chars=100)
+        return stats
 
     monkeypatch.setattr(scheduler_module, "extract_pending", fake_extract_pending)
     monkeypatch.setattr(scheduler_module, "build_storage", lambda _settings: object())

@@ -34,6 +34,7 @@ class ExtractionStatus(StrEnum):
     EXTRACTED = "extracted"
     EMPTY = "empty"  # parsed fine, genuinely contains no text
     NEEDS_OCR = "needs_ocr"  # almost certainly a scan
+    ENCRYPTED = "encrypted"  # readable, but locked with a password we do not have
     UNSUPPORTED = "unsupported"
     FAILED = "failed"
 
@@ -153,14 +154,19 @@ def extract_pdf(data: bytes) -> ExtractionResult:
     try:
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted:
-            # An empty user password is common on "protected" documents.
+            # An empty user password is common on "protected" documents, and
+            # pypdf reports a wrong one by RETURNING a falsy PasswordType, not
+            # by raising — so an unchecked call surfaces much later as the
+            # unhelpful "File has not been decrypted".
             try:
-                reader.decrypt("")
-            except Exception:  # noqa: BLE001
+                opened = reader.decrypt("")
+            except Exception:  # noqa: BLE001 - a damaged encryption dictionary
+                opened = 0
+            if not opened:
                 return ExtractionResult(
-                    ExtractionStatus.FAILED,
+                    ExtractionStatus.ENCRYPTED,
                     method="pypdf",
-                    error="PDF is password protected",
+                    error="Password protected — the password is needed to read it.",
                 )
         pages = [(page.extract_text() or "").strip() for page in reader.pages]
     except (PdfReadError, OSError, ValueError, KeyError) as exc:

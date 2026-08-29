@@ -116,6 +116,7 @@ class Scheduler:
                     considered=stats.considered,
                     extracted=stats.extracted,
                     needs_ocr=stats.needs_ocr,
+                    encrypted=stats.encrypted,
                 )
         except Exception as exc:  # noqa: BLE001 - the loop must survive
             self._record_error("scheduler.extraction_failed", exc)

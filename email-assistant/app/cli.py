@@ -474,6 +474,7 @@ def _extract_batch(args: argparse.Namespace) -> tuple[dict[str, int], int, list[
             "extracted": stats.extracted,
             "characters": stats.characters,
             "needs_ocr": stats.needs_ocr,
+            "encrypted": stats.encrypted,
             "unsupported": stats.unsupported,
             "empty": stats.empty,
             "failed": stats.failed,
@@ -495,6 +496,7 @@ def _report_unreadable() -> int:
 
     label = {
         "needs_ocr": "scan, no text layer",
+        "encrypted": "password protected",
         "unsupported": "format not supported",
         "failed": "could not be parsed",
     }
@@ -533,7 +535,17 @@ def cmd_extract(args: argparse.Namespace) -> int:
         return 0
 
     totals = dict.fromkeys(
-        ("considered", "extracted", "characters", "needs_ocr", "unsupported", "empty", "failed"), 0
+        (
+            "considered",
+            "extracted",
+            "characters",
+            "needs_ocr",
+            "encrypted",
+            "unsupported",
+            "empty",
+            "failed",
+        ),
+        0,
     )
     seen_errors: list[str] = []
 
@@ -561,11 +573,14 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
     print(
         f"\nDone. {totals['extracted']} extracted ({totals['characters']:,} characters), "
-        f"{totals['needs_ocr']} need OCR, {totals['unsupported']} unsupported, "
-        f"{totals['empty']} empty, {totals['failed']} failed."
+        f"{totals['needs_ocr']} need OCR, {totals['encrypted']} password protected, "
+        f"{totals['unsupported']} unsupported, {totals['empty']} empty, "
+        f"{totals['failed']} failed."
     )
     if totals["needs_ocr"]:
         print("Scans need OCR, which is not built yet — their text is not searchable.")
+    if totals["encrypted"]:
+        print("Password-protected files are listed by: python -m app.cli extract --problems")
     for error in seen_errors[:5]:
         print(f"  ! {error}")
     return 0

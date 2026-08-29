@@ -276,6 +276,15 @@ def search_documents_tool(query: str, limit: int = 10) -> str:
         return "\n".join(lines) + more(len(hits), total, "document")
 
 
+def _why_no_text(status: str) -> str:
+    """What the reader should do about a document that carries no text."""
+    return {
+        "needs_ocr": " This is a scan; OCR is not enabled, so its text is not searchable.",
+        "encrypted": " The file is password protected; the password is needed to read it.",
+        "unsupported": " No extractor handles this format.",
+    }.get(status, "")
+
+
 @server.tool(
     description=(
         "Read the full extracted text of one attachment, plus any tracked "
@@ -297,7 +306,7 @@ def get_attachment_text(attachment_id: str, max_chars: int = 12000) -> str:
             return (
                 f"Status: {document.status}."
                 + (f" {document.error}" if document.error else "")
-                + (" This is a scan; OCR is not enabled." if document.status == "needs_ocr" else "")
+                + _why_no_text(document.status)
             )
 
         parts = [f"[{document.method}, {document.char_count:,} characters]"]

@@ -29,6 +29,7 @@ RETRYABLE = {ExtractionStatus.FAILED.value}
 # Statuses that mean the file's contents are not searchable.
 UNREADABLE = (
     ExtractionStatus.NEEDS_OCR.value,
+    ExtractionStatus.ENCRYPTED.value,
     ExtractionStatus.UNSUPPORTED.value,
     ExtractionStatus.FAILED.value,
 )
@@ -40,6 +41,7 @@ class ExtractionRunStats:
     extracted: int = 0
     empty: int = 0
     needs_ocr: int = 0
+    encrypted: int = 0
     unsupported: int = 0
     failed: int = 0
     characters: int = 0
@@ -55,6 +57,8 @@ class ExtractionRunStats:
                 self.empty += 1
             case ExtractionStatus.NEEDS_OCR:
                 self.needs_ocr += 1
+            case ExtractionStatus.ENCRYPTED:
+                self.encrypted += 1
             case ExtractionStatus.UNSUPPORTED:
                 self.unsupported += 1
             case ExtractionStatus.FAILED:
@@ -280,13 +284,15 @@ def extract_pending(
                 entity_type="document_text",
                 summary=(
                     f"Extracted {stats.extracted} document(s); "
-                    f"{stats.needs_ocr} need OCR, {stats.unsupported} unsupported, "
+                    f"{stats.needs_ocr} need OCR, {stats.encrypted} password protected, "
+                    f"{stats.unsupported} unsupported, "
                     f"{stats.failed} failed"
                 ),
                 details={
                     "considered": stats.considered,
                     "extracted": stats.extracted,
                     "needs_ocr": stats.needs_ocr,
+                    "encrypted": stats.encrypted,
                     "unsupported": stats.unsupported,
                     "failed": stats.failed,
                     "characters": stats.characters,

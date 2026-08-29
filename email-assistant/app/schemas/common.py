@@ -120,6 +120,7 @@ class ExtractionSummaryOut(BaseModel):
     extracted: int
     empty: int
     needs_ocr: int
+    encrypted: int = 0
     unsupported: int
     failed: int
     pending: int
