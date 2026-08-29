@@ -137,6 +137,9 @@ Then pull the text out of the attachments:
 ./.venv/bin/python -m app.cli extract
 ```
 
+This also runs until the queue is empty. Scanned PDFs are reported as
+`need OCR` and stay unsearchable — OCR is not built yet.
+
 Then look at what it has:
 
 ```bash

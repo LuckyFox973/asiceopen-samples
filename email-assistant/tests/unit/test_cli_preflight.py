@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import socket
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app import cli
 from app.cli import unreachable_callback
@@ -146,3 +148,113 @@ class TestSyncLoop:
         assert cli.cmd_sync(self._args(once=True)) == 0
         assert len(calls) == 1
         assert "run the same command again" in capsys.readouterr().out
+
+
+class TestExtractLoop:
+    """`extract` works through the whole queue, not one batch of it."""
+
+    @staticmethod
+    def _args(**overrides):
+        defaults = {"limit": 100, "retry_failed": False, "summary": False, "once": False}
+        defaults.update(overrides)
+        return type("Args", (), defaults)()
+
+    @staticmethod
+    def _counts(extracted=100, failed=0):
+        return {
+            "considered": extracted + failed,
+            "extracted": extracted,
+            "characters": extracted * 1000,
+            "needs_ocr": 0,
+            "unsupported": 0,
+            "empty": 0,
+            "failed": failed,
+        }
+
+    def _batches(self, monkeypatch, outcomes, pending_at_start):
+        """Drive the loop through `outcomes`, each (counts, still_pending, errors)."""
+        calls = []
+        monkeypatch.setattr(
+            cli, "session_scope", lambda: contextlib.nullcontext(object()), raising=True
+        )
+        monkeypatch.setattr(
+            "app.services.documents.extraction_summary",
+            lambda _session: {"pending": pending_at_start},
+        )
+
+        def fake_batch(_args):
+            calls.append(1)
+            return outcomes[len(calls) - 1]
+
+        monkeypatch.setattr(cli, "_extract_batch", fake_batch)
+        return calls
+
+    def test_batches_repeat_until_the_queue_is_empty(self, monkeypatch, capsys):
+        calls = self._batches(
+            monkeypatch,
+            [
+                (self._counts(), 437, []),
+                (self._counts(), 337, []),
+                (self._counts(37), 0, []),
+            ],
+            pending_at_start=537,
+        )
+        assert cli.cmd_extract(self._args()) == 0
+        assert len(calls) == 3
+        assert "237 extracted" in capsys.readouterr().out
+
+    def test_a_batch_that_clears_nothing_stops_the_loop(self, monkeypatch, capsys):
+        """Files whose extraction raises write no result and stay pending forever."""
+        calls = self._batches(
+            monkeypatch,
+            [(self._counts(0, failed=8), 8, ["deadbeef: broken PDF"])],
+            pending_at_start=8,
+        )
+        assert cli.cmd_extract(self._args()) == 1
+        assert len(calls) == 1
+        assert "broken PDF" in capsys.readouterr().err
+
+    def test_an_empty_queue_does_no_work(self, monkeypatch, capsys):
+        calls = self._batches(monkeypatch, [], pending_at_start=0)
+        assert cli.cmd_extract(self._args()) == 0
+        assert calls == []
+        assert "Nothing to extract" in capsys.readouterr().out
+
+    def test_once_does_a_single_batch(self, monkeypatch):
+        calls = self._batches(monkeypatch, [(self._counts(), 437, [])], pending_at_start=537)
+        assert cli.cmd_extract(self._args(once=True)) == 0
+        assert len(calls) == 1
+
+
+class TestDatabaseDownMessage:
+    """A stopped database is the commonest failure; it should read like a sentence."""
+
+    def test_the_driver_message_survives_without_its_class_prefix(self):
+        exc = OperationalError(
+            "SELECT 1",
+            {},
+            Exception('connection failed: connection to server at "127.0.0.1" refused'),
+        )
+        line = cli._first_line(exc)
+        assert line.startswith("connection failed")
+        assert "psycopg" not in line
+        assert "sqlalchemy" not in line.lower()
+
+    def test_main_reports_it_in_plain_words(self, monkeypatch, capsys):
+        def explode(_args):
+            raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+        monkeypatch.setattr(cli, "cmd_stats", explode)
+        assert cli.main(["stats"]) == 1
+        err = capsys.readouterr().err
+        assert "database is not reachable" in err
+        assert "brew services start postgresql@16" in err
+        assert "Traceback" not in err
+
+    def test_ctrl_c_says_nothing_is_lost(self, monkeypatch, capsys):
+        def interrupt(_args):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(cli, "cmd_stats", interrupt)
+        assert cli.main(["stats"]) == 130
+        assert "Nothing already stored is lost" in capsys.readouterr().out

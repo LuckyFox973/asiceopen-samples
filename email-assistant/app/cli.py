@@ -15,6 +15,7 @@ so behaviour cannot drift between the two.
 from __future__ import annotations
 
 import argparse
+import re
 import socket
 import sys
 import uuid
@@ -22,6 +23,7 @@ from datetime import date
 from urllib.parse import urlparse
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import get_settings
 from app.core.crypto import generate_key
@@ -455,33 +457,83 @@ def cmd_daemon(args: argparse.Namespace) -> int:
     return 1 if stats.errors else 0
 
 
-def cmd_extract(args: argparse.Namespace) -> int:
+def _extract_batch(args: argparse.Namespace) -> tuple[dict[str, int], int, list[str]]:
+    """One batch, committed on its own. Returns its counts, what is left, and errors."""
     from app.services.documents import extract_pending, extraction_summary
     from app.services.storage import build_storage
 
     with session_scope() as session:
-        if args.summary:
-            for key, value in extraction_summary(session).items():
-                print(f"{key:<12}: {value}")
-            return 0
-
         stats = extract_pending(
             session,
             build_storage(),
             limit=args.limit,
             retry_failed=args.retry_failed,
         )
-        if not stats.considered:
-            print("Nothing to extract — every stored file already has a result.")
-            return 0
+        counts = {
+            "considered": stats.considered,
+            "extracted": stats.extracted,
+            "characters": stats.characters,
+            "needs_ocr": stats.needs_ocr,
+            "unsupported": stats.unsupported,
+            "empty": stats.empty,
+            "failed": stats.failed,
+        }
+        session.flush()
+        return counts, extraction_summary(session)["pending"], list(stats.errors)
+
+
+def cmd_extract(args: argparse.Namespace) -> int:
+    """Extract text from every stored file, in batches, until none are left."""
+    from app.services.documents import extraction_summary
+
+    if args.summary:
+        with session_scope() as session:
+            for key, value in extraction_summary(session).items():
+                print(f"{key:<12}: {value}")
+        return 0
+
+    with session_scope() as session:
+        remaining = extraction_summary(session)["pending"]
+    if not remaining:
+        print("Nothing to extract — every stored file already has a result.")
+        return 0
+
+    totals = dict.fromkeys(
+        ("considered", "extracted", "characters", "needs_ocr", "unsupported", "empty", "failed"), 0
+    )
+    seen_errors: list[str] = []
+
+    while remaining:
+        counts, still_pending, errors = _extract_batch(args)
+        for key, value in counts.items():
+            totals[key] += value
+        seen_errors.extend(errors)
+
         print(
-            f"{stats.considered} file(s): {stats.extracted} extracted "
-            f"({stats.characters:,} chars), {stats.needs_ocr} need OCR, "
-            f"{stats.unsupported} unsupported, {stats.empty} empty, "
-            f"{stats.failed} failed"
+            f"{totals['considered']} of {totals['considered'] + still_pending} file(s) done "
+            f"— {totals['extracted']} extracted ({totals['characters']:,} chars)"
         )
-        for error in stats.errors[:5]:
-            print(f"  ! {error}")
+
+        # A file whose extraction raises writes no result row, so it stays
+        # pending and would be picked up again for as long as this ran.
+        if still_pending >= remaining:
+            print(f"\nStopped: {still_pending} file(s) cannot be processed.", file=sys.stderr)
+            for error in seen_errors[:5]:
+                print(f"  ! {error}", file=sys.stderr)
+            return 1
+        remaining = still_pending
+        if args.once:
+            break
+
+    print(
+        f"\nDone. {totals['extracted']} extracted ({totals['characters']:,} characters), "
+        f"{totals['needs_ocr']} need OCR, {totals['unsupported']} unsupported, "
+        f"{totals['empty']} empty, {totals['failed']} failed."
+    )
+    if totals["needs_ocr"]:
+        print("Scans need OCR, which is not built yet — their text is not searchable.")
+    for error in seen_errors[:5]:
+        print(f"  ! {error}")
     return 0
 
 
@@ -923,6 +975,9 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument(
         "--summary", action="store_true", help="show counts instead of extracting"
     )
+    extract_parser.add_argument(
+        "--once", action="store_true", help="do a single batch instead of finishing the queue"
+    )
     extract_parser.set_defaults(func=cmd_extract)
 
     find_parser = sub.add_parser("find", help="search inside document text")
@@ -994,7 +1049,29 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     args = build_parser().parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except OperationalError as exc:
+        # A stopped database is the commonest way any of these commands fails,
+        # and a hundred lines of SQLAlchemy traceback says none of that.
+        print(f"error: the database is not reachable.\n\n  {_first_line(exc)}\n", file=sys.stderr)
+        print("If it is running on this Mac, start it with:", file=sys.stderr)
+        print("    brew services start postgresql@16", file=sys.stderr)
+        print("\nThen run: python -m app.cli check", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nStopped. Nothing already stored is lost — run the same command to resume.")
+        return 130
+
+
+def _first_line(exc: Exception) -> str:
+    """The sentence in a driver error that actually says what went wrong."""
+    text = str(exc).strip()
+    if not text:
+        return exc.__class__.__name__
+    # SQLAlchemy prefixes the driver's own message with its exception class,
+    # which is noise in front of the part a person can act on.
+    return re.sub(r"^\([\w.]+\)\s*", "", text.splitlines()[0])
 
 
 if __name__ == "__main__":
