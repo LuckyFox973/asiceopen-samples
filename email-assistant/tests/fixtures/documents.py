@@ -22,11 +22,18 @@ def make_pdf(pages: list[str]) -> bytes:
     kids = " ".join(f"{4 + 2 * i} 0 R" for i in range(page_count))
     objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
     objects.append(f"<< /Type /Pages /Kids [{kids}] /Count {page_count} >>".encode())
-    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    # WinAnsiEncoding, not the default StandardEncoding: without it a byte
+    # like 0xE1 draws some unrelated glyph, so a fixture written with accents
+    # renders as noise and any test reading it back is testing nothing.
+    objects.append(
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
+    )
 
     for text in pages:
         escaped = text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
-        stream = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1", "replace")
+        # cp1252 is what WinAnsiEncoding is; it covers á é í ó ú ý ä š ž but
+        # not č ť ľ ď ň ô ŕ, which no base-14 font can draw.
+        stream = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("cp1252", "replace")
         objects.append(
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
             b"/Resources << /Font << /F1 3 0 R >> >> /Contents "

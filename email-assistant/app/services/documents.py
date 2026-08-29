@@ -15,6 +15,7 @@ from pathlib import Path
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import Attachment, AttachmentBlob, AuditLog, DocumentText
 from app.services.extraction import ExtractionStatus, extract
@@ -22,6 +23,11 @@ from app.services.storage import AttachmentStorage
 from app.services.versions import normalise_filename
 
 log = get_logger(__name__)
+
+# A recognised page shorter than this, or mostly punctuation, is noise
+# rather than text — OCR on a photograph of a wall returns stray marks.
+MIN_OCR_CHARS = 16
+MIN_OCR_ALNUM_RATIO = 0.5
 
 # Statuses that mean the file's contents are not searchable.
 UNREADABLE = (
@@ -327,6 +333,169 @@ def extract_pending(
         )
         session.flush()
     return stats
+
+
+@dataclass
+class OcrRunStats:
+    considered: int = 0
+    recognised: int = 0
+    blank: int = 0
+    failed: int = 0
+    characters: int = 0
+    pages: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+def scans_awaiting_ocr(
+    session: Session, limit: int | None = None, since: datetime | None = None
+) -> list[AttachmentBlob]:
+    """Files classified as scans, oldest attempt first.
+
+    *since* excludes anything already attempted in this run, so a scan that
+    OCR cannot read does not come round again for as long as the loop runs.
+    """
+    stmt = (
+        select(AttachmentBlob)
+        .join(DocumentText, DocumentText.blob_id == AttachmentBlob.id)
+        .where(DocumentText.status == ExtractionStatus.NEEDS_OCR.value)
+        .order_by(DocumentText.extracted_at.asc().nullsfirst())
+    )
+    if since is not None:
+        stmt = stmt.where(
+            or_(DocumentText.extracted_at.is_(None), DocumentText.extracted_at < since)
+        )
+    if limit:
+        stmt = stmt.limit(limit)
+    return list(session.scalars(stmt).all())
+
+
+def ocr_pending(
+    session: Session,
+    storage: AttachmentStorage,
+    limit: int | None = 10,
+    since: datetime | None = None,
+    settings: Settings | None = None,
+) -> OcrRunStats:
+    """Run OCR over the scan queue and record what it found.
+
+    Kept apart from :func:`extract_pending` because the two cost wildly
+    different things: parsing a PDF is milliseconds, reading a photographed
+    page is seconds.  A sync that had to wait for the second would never keep
+    up with a mailbox.
+    """
+    from app.services.ocr import read_image, read_pdf
+
+    settings = settings or get_settings()
+    stats = OcrRunStats()
+
+    for blob in scans_awaiting_ocr(session, limit=limit, since=since):
+        filename, mime_type = describe_blob(session, blob)
+        savepoint = session.begin_nested()
+        try:
+            data = storage.get(blob.storage_key)
+            is_pdf = data.startswith(b"%PDF-") or (mime_type or "").endswith("pdf")
+            if is_pdf:
+                result = read_pdf(
+                    data,
+                    languages=settings.ocr_languages,
+                    dpi=settings.ocr_dpi,
+                    max_pages=settings.ocr_max_pages,
+                    timeout=settings.ocr_timeout_seconds,
+                )
+            else:
+                result = read_image(
+                    data,
+                    languages=settings.ocr_languages,
+                    timeout=settings.ocr_timeout_seconds,
+                )
+        except Exception as exc:  # noqa: BLE001 - one bad file must not stop the batch
+            savepoint.rollback()
+            stats.considered += 1
+            stats.failed += 1
+            stats.errors.append(f"{filename or blob.sha256[:12]}: {exc}")
+            continue
+
+        stats.considered += 1
+        stats.pages += result.pages
+        note = "; ".join(result.notes) if result.notes else None
+
+        if result.error:
+            stats.failed += 1
+            stats.errors.append(f"{filename or blob.sha256[:12]}: {result.error}")
+            # The status is left alone: the file is still a scan, and a run
+            # with the tools installed should try it again.
+            savepoint.rollback()
+            continue
+
+        text = normalise_ocr_text(result.text)
+        if text:
+            stats.recognised += 1
+            stats.characters += len(text)
+            _upsert(
+                session,
+                blob,
+                status=ExtractionStatus.EXTRACTED,
+                method=f"ocr:{result.engine}",
+                text=text,
+                page_count=result.pages or None,
+                error=note,
+            )
+        else:
+            # OCR ran and found nothing. Recording that as EMPTY rather than
+            # leaving it a scan is what stops it being retried for ever.
+            stats.blank += 1
+            _upsert(
+                session,
+                blob,
+                status=ExtractionStatus.EMPTY,
+                method=f"ocr:{result.engine}",
+                text="",
+                error=note or "OCR found no text in this image.",
+            )
+        savepoint.commit()
+
+    if stats.considered:
+        session.add(
+            AuditLog(
+                occurred_at=datetime.now(UTC),
+                actor="system",
+                action="documents.ocr",
+                entity_type="document_text",
+                summary=(
+                    f"OCR read {stats.recognised} of {stats.considered} scan(s); "
+                    f"{stats.blank} held no text, {stats.failed} could not be read"
+                ),
+                details={
+                    "considered": stats.considered,
+                    "recognised": stats.recognised,
+                    "blank": stats.blank,
+                    "failed": stats.failed,
+                    "characters": stats.characters,
+                    "pages": stats.pages,
+                },
+                automatic=True,
+            )
+        )
+        session.flush()
+    return stats
+
+
+def normalise_ocr_text(text: str) -> str:
+    """Tidy what the recogniser returned, and reject a page of noise.
+
+    OCR on a photograph of a wall returns a scattering of stray marks. Storing
+    those puts nonsense in the index under a real filename, which is worse
+    than an honest blank.
+    """
+    from app.services.extraction import normalise
+
+    cleaned = normalise(text)
+    if len(cleaned) < MIN_OCR_CHARS:
+        return ""
+    letters = sum(character.isalnum() for character in cleaned)
+    if letters < len(cleaned) * MIN_OCR_ALNUM_RATIO:
+        return ""
+    return cleaned
 
 
 def extraction_summary(

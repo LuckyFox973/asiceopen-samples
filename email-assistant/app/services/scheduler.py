@@ -35,6 +35,7 @@ class SchedulerStats:
     syncs_run: int = 0
     sync_failures: int = 0
     documents_extracted: int = 0
+    scans_read: int = 0
     backups_run: int = 0
     backup_failures: int = 0
     messages_created: int = 0
@@ -94,6 +95,7 @@ class Scheduler:
         self.stats.cycles += 1
         self._sync_all()
         self._extract_documents()
+        self._read_scans()
         if self.settings.backup_enabled and self._backup_is_due():
             self._run_backup()
         return self.stats
@@ -120,6 +122,45 @@ class Scheduler:
                 )
         except Exception as exc:  # noqa: BLE001 - the loop must survive
             self._record_error("scheduler.extraction_failed", exc)
+
+    def _read_scans(self) -> None:
+        """Run OCR over a few scans per cycle, when it is switched on.
+
+        A small batch on purpose: a photographed page takes seconds where a
+        parsed one takes milliseconds, and a cycle that stopped to read four
+        hundred of them would never sync mail again.
+        """
+        if not self.settings.ocr_enabled:
+            return
+        try:
+            from app.services.documents import ocr_pending
+            from app.services.ocr import capability
+
+            if not capability().reads_images:
+                # Said once per cycle rather than per file, and never fatal.
+                log.warning("scheduler.ocr_unavailable", missing=capability().missing())
+                return
+
+            started = datetime.now(UTC)
+            with session_scope() as session:
+                stats = ocr_pending(
+                    session,
+                    build_storage(self.settings),
+                    limit=self.settings.ocr_batch_size,
+                    since=started,
+                    settings=self.settings,
+                )
+            if stats.considered:
+                self.stats.scans_read += stats.recognised
+                log.info(
+                    "scheduler.ocr",
+                    considered=stats.considered,
+                    recognised=stats.recognised,
+                    blank=stats.blank,
+                    failed=stats.failed,
+                )
+        except Exception as exc:  # noqa: BLE001 - the loop must survive
+            self._record_error("scheduler.ocr_failed", exc)
 
     def _sync_all(self) -> None:
         try:

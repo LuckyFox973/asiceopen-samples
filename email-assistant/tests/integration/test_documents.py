@@ -15,7 +15,10 @@ from app.services.documents import (
     extract_pending,
     extraction_summary,
     get_document_text,
+    normalise_ocr_text,
+    ocr_pending,
     pending_blobs,
+    scans_awaiting_ocr,
     unreadable_documents,
 )
 from app.services.search import search_documents
@@ -471,3 +474,88 @@ class TestRetryConverges:
         started = datetime.now(UTC)
         extract_pending(db_session, local_storage, limit=1, retry_failed=True, since=started)
         assert extraction_summary(db_session, retry_failed=True, since=started)["pending"] == 2
+
+
+class TestOcrQueue:
+    """Reading the scan queue: what gets stored, and when the run ends."""
+
+    @pytest.fixture
+    def scans(self, db_session, account, local_storage):
+        """Two files the parsers classified as scans."""
+        documents = {f"tok-{i}": make_scanned_pdf() + f"%{i}".encode() for i in range(2)}
+        messages = [
+            message_with(f"o{i}", f"Sken{i}.pdf", "application/pdf", f"tok-{i}", f"o{i}")
+            for i in range(2)
+        ]
+        SyncEngine(
+            session=db_session,
+            account=account,
+            client=FakeGmailClient(messages, attachments=documents),
+            storage=local_storage,
+            default_start_date=date(2025, 1, 1),
+            download_attachments=True,
+        ).initial_sync()
+        extract_pending(db_session, local_storage)
+        return account
+
+    def test_the_queue_holds_exactly_the_scans(self, db_session, scans):
+        assert len(scans_awaiting_ocr(db_session)) == 2
+
+    def test_a_readable_document_is_never_queued(self, db_session, synced, local_storage):
+        extract_pending(db_session, local_storage)
+        assert scans_awaiting_ocr(db_session) == []
+
+    def test_a_run_settles_what_it_looked_at(self, db_session, scans, local_storage):
+        """Without the run mark, a scan OCR cannot read comes round for ever."""
+        started = datetime.now(UTC)
+        stats = ocr_pending(db_session, local_storage, since=started)
+        assert stats.considered == 2
+        assert scans_awaiting_ocr(db_session, since=started) == []
+
+    def test_a_file_untouched_by_the_run_is_still_queued(self, db_session, scans, local_storage):
+        started = datetime.now(UTC)
+        ocr_pending(db_session, local_storage, limit=1, since=started)
+        assert len(scans_awaiting_ocr(db_session, since=started)) == 1
+
+    def test_a_scan_holding_no_text_is_recorded_as_empty(self, db_session, scans, local_storage):
+        """Leaving it a scan would queue it again on every future run."""
+        ocr_pending(db_session, local_storage, since=datetime.now(UTC))
+        statuses = set(db_session.scalars(select(DocumentText.status)).all())
+        assert "needs_ocr" not in statuses
+
+    def test_the_run_is_written_to_the_audit_log(self, db_session, scans, local_storage):
+        ocr_pending(db_session, local_storage, since=datetime.now(UTC))
+        actions = set(db_session.scalars(select(AuditLog.action)).all())
+        assert "documents.ocr" in actions
+
+    def test_missing_tools_leave_the_queue_untouched(
+        self, db_session, scans, local_storage, monkeypatch
+    ):
+        """A machine without tesseract must not mark scans as dealt with."""
+        from app.services import ocr as ocr_module
+
+        ocr_module.forget_capability()
+        monkeypatch.setattr(ocr_module.shutil, "which", lambda _name: None)
+        try:
+            stats = ocr_pending(db_session, local_storage, since=datetime.now(UTC))
+            assert stats.recognised == 0
+            assert stats.failed == 2
+            assert len(scans_awaiting_ocr(db_session)) == 2
+        finally:
+            ocr_module.forget_capability()
+
+
+class TestOcrTextIsWorthStoring:
+    """OCR on a photograph of a wall returns stray marks, not text."""
+
+    def test_a_real_sentence_is_kept(self):
+        assert normalise_ocr_text("Zmluvna pokuta je 2000 EUR") != ""
+
+    def test_a_scattering_of_marks_is_rejected(self):
+        assert normalise_ocr_text("~ | . , ' `` -- _ ~~ || ..") == ""
+
+    def test_a_few_stray_characters_are_rejected(self):
+        assert normalise_ocr_text("a1 b") == ""
+
+    def test_slovak_diacritics_count_as_letters(self):
+        assert normalise_ocr_text("Záložné právo a náhrada škody") != ""

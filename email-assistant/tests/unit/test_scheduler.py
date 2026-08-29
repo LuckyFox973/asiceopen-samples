@@ -224,3 +224,55 @@ class TestLoopControl:
             wait=lambda _s: scheduler.request_stop(),
         )
         assert scheduler.run_forever(max_cycles=10).cycles == 1
+
+
+class TestOcrStep:
+    """OCR runs in the loop only when it is switched on and installed."""
+
+    @pytest.fixture(autouse=True)
+    def fresh_probe(self):
+        """Clear the cached tool probe around each test, not inside it.
+
+        Doing it in the test's own `finally` calls whatever `capability` has
+        been monkeypatched to, which is not the cached function.
+        """
+        from app.services import ocr as ocr_module
+
+        ocr_module.forget_capability()
+        yield
+        ocr_module.forget_capability()
+
+    def test_it_is_skipped_when_switched_off(self, fake_world, monkeypatch):
+        called = []
+        monkeypatch.setattr(
+            "app.services.documents.ocr_pending",
+            lambda *a, **k: called.append(1),
+        )
+        Scheduler(settings=settings(ocr_enabled=False), clock=lambda: BRATISLAVA_0500).tick()
+        assert called == []
+
+    def test_missing_tools_do_not_stop_the_cycle(self, fake_world, monkeypatch):
+        """A machine without tesseract must still sync mail."""
+        from app.services import ocr as ocr_module
+
+        monkeypatch.setattr(ocr_module.shutil, "which", lambda _name: None)
+
+        scheduler = Scheduler(settings=settings(ocr_enabled=True), clock=lambda: BRATISLAVA_0500)
+        stats = scheduler.tick()
+        assert stats.errors == []
+        assert stats.scans_read == 0
+
+    def test_what_it_read_is_counted(self, fake_world, monkeypatch):
+        from app.services import ocr as ocr_module
+        from app.services.documents import OcrRunStats
+
+        monkeypatch.setattr(
+            ocr_module,
+            "capability",
+            lambda: ocr_module.OcrCapability(tesseract="/x", rasteriser="/y", languages=("slk",)),
+        )
+        read = OcrRunStats(considered=3, recognised=2, blank=1, characters=900)
+        monkeypatch.setattr("app.services.documents.ocr_pending", lambda *a, **k: read)
+
+        scheduler = Scheduler(settings=settings(ocr_enabled=True), clock=lambda: BRATISLAVA_0500)
+        assert scheduler.tick().scans_read == 2

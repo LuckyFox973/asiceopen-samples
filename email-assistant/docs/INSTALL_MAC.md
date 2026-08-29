@@ -146,6 +146,30 @@ To see exactly which files could not be read, and how often each arrived:
 ./.venv/bin/python -m app.cli extract --problems
 ```
 
+### Reading scans
+
+Photographs and scanned filings have no text in them to extract. To make them
+searchable, install the two OCR tools once:
+
+```bash
+brew install tesseract tesseract-lang poppler
+```
+
+`tesseract-lang` is the part that speaks Slovak. Check it took:
+
+```bash
+./.venv/bin/python -m app.cli ocr --check
+```
+
+Then read the queue. This is slow — seconds per page — so leave it running:
+
+```bash
+./.venv/bin/python -m app.cli ocr
+```
+
+To have it happen by itself, put `OCR_ENABLED=true` in `.env`; the background
+daemon then reads a few scans per cycle.
+
 Then look at what it has:
 
 ```bash

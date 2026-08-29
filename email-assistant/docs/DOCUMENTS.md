@@ -113,6 +113,64 @@ other hides a scan.
 A password-protected PDF gets its own status too — `encrypted`. It is not
 broken, and the recipient generally knows the password; it only needs saying.
 
+## OCR
+
+A photographed page and a scanned filing carry no text layer, so no parser
+can read them. `extract` classifies them as `needs_ocr` and moves on; a
+separate command reads the queue:
+
+```bash
+python -m app.cli ocr --check   # is it installed?
+python -m app.cli ocr           # read the queue
+```
+
+Separate on purpose. Parsing a PDF is milliseconds and reading a photographed
+page is seconds, so a sync that waited for the second would never keep up with
+a mailbox. The daemon runs a small batch per cycle when `OCR_ENABLED=true`.
+
+**Two binaries, driven through pipes** — `tesseract` for recognition,
+`pdftoppm` for turning a scanned PDF into images — rather than a Python
+binding, which buys three things at once:
+
+- **Nothing touches the disk.** The image goes in on stdin and text comes back
+  on stdout, so OCR creates no second copy of an attachment that would then
+  have to be found and deleted when a client asks for their file.
+- **Hostile input runs where it can be killed.** These are images from
+  strangers fed to a large C++ image stack; a subprocess with a timeout and a
+  page budget can be stopped, and an in-process decoder cannot.
+- **Absence is honest.** Neither binary is a Python dependency, so a machine
+  without them runs everything else unchanged and says exactly what is missing.
+
+Installing them on a Mac:
+
+```bash
+brew install tesseract tesseract-lang poppler
+```
+
+`tesseract-lang` is what carries the Slovak data. Without it the default
+`slk+eng` is refused up front rather than silently falling back to English —
+English models read Slovak text and quietly drop every diacritic.
+
+| Setting | Default | Why |
+|---|---|---|
+| `OCR_ENABLED` | `false` | The binaries are not installed by this project |
+| `OCR_LANGUAGES` | `slk+eng` | Slovak first; a Slovak filing quoting an English contract is the common case |
+| `OCR_DPI` | `300` | What tesseract is tuned for — below 200 accuracy falls away, above 400 the time doubles for nothing |
+| `OCR_MAX_PAGES` | `30` | A 400-page scan should yield its first pages, not block the queue |
+| `OCR_TIMEOUT_SECONDS` | `120` | Per page and per image |
+
+A scan is read **page by page**: rasterising a long document in one go is
+gigabytes of bitmaps, and a per-page budget means a long filing yields what it
+can rather than nothing at all. When the page cap truncates a document the
+result says so — silently reading three pages of forty would be worse than
+refusing.
+
+What OCR returns is checked before it is stored. A photograph of a wall comes
+back as a scattering of stray marks, and putting those in the index under a
+real filename is worse than an honest blank; text that is too short or mostly
+punctuation is recorded as `empty`. Recording it — rather than leaving the
+file a scan — is also what stops it being queued again on every future run.
+
 ## Word: why `python-docx` was not enough
 
 `python-docx` exposes `paragraph.text`, which silently drops **both** sides of

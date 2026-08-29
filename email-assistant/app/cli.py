@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.crypto import generate_key
 from app.core.logging import configure_logging
 from app.core.startup import verify_configuration
@@ -88,6 +88,16 @@ def cmd_check(_args: argparse.Namespace) -> int:
 
     # Printed one per line so they can be pasted straight into the Google
     # consent screen, which is where a mismatch costs a re-authorisation.
+    from app.services.ocr import capability
+
+    tools = capability()
+    if tools.reads_pdfs:
+        print(f"  OCR               : ready ({', '.join(tools.languages) or 'no languages'})")
+    elif tools.reads_images:
+        print("  OCR               : images only — pdftoppm missing, PDF scans cannot be imaged")
+    else:
+        print("  OCR               : not installed (python -m app.cli ocr --check)")
+
     print("\nOAuth scopes this application will request:")
     for scope in settings.gmail_scopes:
         print(f"  {scope}")
@@ -596,11 +606,141 @@ def cmd_extract(args: argparse.Namespace) -> int:
         f"{totals['not_a_document']} were signature blocks or decoration, not documents."
     )
     if totals["needs_ocr"]:
-        print("Scans need OCR, which is not built yet — their text is not searchable.")
+        from app.services.ocr import capability
+
+        if capability().reads_images:
+            print(f"{totals['needs_ocr']} scan(s) need OCR. Read them: python -m app.cli ocr")
+        else:
+            print(
+                f"{totals['needs_ocr']} scan(s) need OCR, which is not installed here. "
+                "See: python -m app.cli ocr --check"
+            )
     if totals["encrypted"]:
         print("Password-protected files are listed by: python -m app.cli extract --problems")
     for error in seen_errors[:5]:
         print(f"  ! {error}")
+    return 0
+
+
+def _ocr_batch(args: argparse.Namespace, since: datetime) -> tuple[dict[str, int], int, list[str]]:
+    """One batch of scans, committed on its own."""
+    from app.services.documents import ocr_pending, scans_awaiting_ocr
+    from app.services.storage import build_storage
+
+    settings = get_settings()
+    with session_scope() as session:
+        stats = ocr_pending(
+            session,
+            build_storage(settings),
+            limit=args.limit or settings.ocr_batch_size,
+            since=since,
+            settings=settings,
+        )
+        remaining = len(scans_awaiting_ocr(session, since=since))
+        return (
+            {
+                "considered": stats.considered,
+                "recognised": stats.recognised,
+                "blank": stats.blank,
+                "failed": stats.failed,
+                "characters": stats.characters,
+                "pages": stats.pages,
+            },
+            remaining,
+            list(stats.errors),
+        )
+
+
+def cmd_ocr(args: argparse.Namespace) -> int:
+    """Read the scans that no parser could, until the queue is empty."""
+    from app.services.documents import scans_awaiting_ocr
+    from app.services.ocr import capability
+
+    settings = get_settings()
+    tools = capability()
+
+    if args.check:
+        return _report_ocr_tools(tools, settings)
+
+    missing = tools.missing()
+    if missing:
+        needed = " and ".join(missing)
+        print(f"error: OCR needs {needed}, which are not installed.", file=sys.stderr)
+        print("\nOn a Mac:\n    brew install tesseract tesseract-lang poppler", file=sys.stderr)
+        print("\nThen check it: python -m app.cli ocr --check", file=sys.stderr)
+        return 1
+
+    unsupported = tools.unsupported(settings.ocr_languages)
+    if unsupported:
+        print(
+            f"error: no language data for {', '.join(unsupported)}. "
+            f"Installed: {', '.join(tools.languages) or 'none'}",
+            file=sys.stderr,
+        )
+        print("\nOn a Mac:  brew install tesseract-lang", file=sys.stderr)
+        return 1
+
+    # Anything looked at during this run is settled, however it turned out;
+    # without the mark a scan OCR cannot read comes round for ever.
+    since = datetime.now(UTC)
+    with session_scope() as session:
+        remaining = len(scans_awaiting_ocr(session, since=since))
+    if not remaining:
+        print("No scans are waiting. Run: python -m app.cli extract --problems")
+        return 0
+
+    total = remaining
+    print(f"{total} scan(s) to read, in {settings.ocr_languages}. This is slow — leave it.")
+
+    totals = dict.fromkeys(
+        ("considered", "recognised", "blank", "failed", "characters", "pages"), 0
+    )
+    seen_errors: list[str] = []
+
+    while remaining:
+        counts, still_waiting, errors = _ocr_batch(args, since)
+        for key, value in counts.items():
+            totals[key] += value
+        seen_errors.extend(errors)
+
+        print(
+            f"{totals['considered']} of {total} done — {totals['recognised']} read "
+            f"({totals['characters']:,} chars from {totals['pages']} page(s))"
+        )
+        if still_waiting >= remaining:
+            break
+        remaining = still_waiting
+        if args.once:
+            print("Stopping after one batch; run again to continue.")
+            return 0
+
+    print(
+        f"\nDone. {totals['recognised']} scan(s) read ({totals['characters']:,} characters), "
+        f"{totals['blank']} held no text, {totals['failed']} could not be read."
+    )
+    for error in seen_errors[:5]:
+        print(f"  ! {error}")
+    return 0
+
+
+def _report_ocr_tools(tools, settings: Settings) -> int:
+    """Say whether this machine can do OCR, and what to install if not."""
+    print(f"tesseract : {tools.tesseract or 'NOT INSTALLED'}")
+    print(f"pdftoppm  : {tools.rasteriser or 'NOT INSTALLED (PDF scans cannot be imaged)'}")
+    print(f"languages : {', '.join(tools.languages) or 'none'}")
+    print(f"wanted    : {settings.ocr_languages}")
+
+    missing = tools.missing()
+    unsupported = tools.unsupported(settings.ocr_languages)
+    if missing:
+        print(f"\nMissing: {', '.join(missing)}")
+        print("On a Mac:  brew install tesseract tesseract-lang poppler")
+        return 1
+    if unsupported:
+        print(f"\nNo language data for: {', '.join(unsupported)}")
+        print("On a Mac:  brew install tesseract-lang")
+        return 1
+    print("\nOCR is ready.")
     return 0
 
 
@@ -1051,6 +1191,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--problems", action="store_true", help="list the files that could not be read"
     )
     extract_parser.set_defaults(func=cmd_extract)
+
+    ocr_parser = sub.add_parser("ocr", help="read scans that no parser could")
+    ocr_parser.add_argument("--limit", type=int, default=0, help="scans per batch")
+    ocr_parser.add_argument("--once", action="store_true", help="do a single batch")
+    ocr_parser.add_argument(
+        "--check", action="store_true", help="report whether the OCR tools are installed"
+    )
+    ocr_parser.set_defaults(func=cmd_ocr)
 
     find_parser = sub.add_parser("find", help="search inside document text")
     find_parser.add_argument("query")

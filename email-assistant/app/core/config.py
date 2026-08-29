@@ -122,6 +122,20 @@ class Settings(BaseSettings):
     # several cycles instead of blocking one.
     extract_batch_size: int = Field(default=50, ge=1, le=1000)
 
+    # --- OCR ---------------------------------------------------------------
+    # Off by default because it needs two binaries this project does not
+    # install; turning it on without them changes nothing but the message.
+    ocr_enabled: bool = False
+    # Slovak first, English second: a Slovak court document quoting an English
+    # contract is the common case, and the order is the priority.
+    ocr_languages: str = "slk+eng"
+    # 300 dpi is what tesseract is tuned for; below 200 accuracy falls away
+    # and above 400 the time doubles for nothing.
+    ocr_dpi: int = Field(default=300, ge=72, le=1200)
+    ocr_max_pages: int = Field(default=30, ge=1, le=2000)
+    ocr_timeout_seconds: int = Field(default=120, ge=5, le=3600)
+    ocr_batch_size: int = Field(default=10, ge=1, le=500)
+
     # --- Internal job auth -------------------------------------------------
     job_auth_token: str = ""
 
