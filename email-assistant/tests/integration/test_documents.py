@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db.models import AuditLog, DocumentText
 from app.db.session import get_db
@@ -229,7 +229,10 @@ class TestDocumentSearch:
     def test_highlight_shows_the_matching_passage(self, db_session, synced, local_storage):
         extract_pending(db_session, local_storage)
         hits, _ = search_documents(db_session, synced.id, "duplicitne")
-        assert "<b>" in hits[0].headline
+        # Guillemets rather than <b>: ts_headline does not escape the document
+        # it is marking up, so HTML markers around attacker-supplied text
+        # would be an injection waiting for the first web view of a hit.
+        assert "«duplicitne»" in hits[0].headline
 
     def test_search_ignores_diacritics(self, db_session, account, local_storage):
         SyncEngine(
@@ -277,7 +280,7 @@ class TestApi:
         body = client.get("/api/v1/documents/search", params={"q": "CMR duplicitne"}).json()
         assert body["total"] == 1
         assert body["items"][0]["filename"] == "Rozhodnutie.pdf"
-        assert "<b>" in body["items"][0]["highlight"]
+        assert "«" in body["items"][0]["highlight"]
 
     def test_attachment_text_endpoint(self, client, db_session, synced, local_storage):
         extract_pending(db_session, local_storage)
@@ -559,3 +562,122 @@ class TestOcrTextIsWorthStoring:
 
     def test_slovak_diacritics_count_as_letters(self):
         assert normalise_ocr_text("Záložné právo a náhrada škody") != ""
+
+
+class TestSearchDeduplication:
+    """One invoice sent to three people is one document, not three results."""
+
+    @pytest.fixture
+    def circulated(self, db_session, account, local_storage):
+        """The same PDF arriving in three separate messages."""
+        invoice = make_pdf(["Faktura c. 2864622723, splatnost 19.05.2026"])
+        documents = {f"tok-{i}": invoice for i in range(3)}
+        messages = [
+            message_with(f"c{i}", "Faktura.pdf", "application/pdf", f"tok-{i}", f"c{i}")
+            for i in range(3)
+        ]
+        SyncEngine(
+            session=db_session,
+            account=account,
+            client=FakeGmailClient(messages, attachments=documents),
+            storage=local_storage,
+            default_start_date=date(2025, 1, 1),
+            download_attachments=True,
+        ).initial_sync()
+        extract_pending(db_session, local_storage)
+        return account
+
+    def test_three_copies_are_three_attachments_and_one_blob(self, db_session, circulated):
+        """The premise: dedup is by content, so the text exists once."""
+        from app.db.models import Attachment, AttachmentBlob
+
+        assert db_session.scalar(select(func.count(Attachment.id))) == 3
+        assert db_session.scalar(select(func.count(AttachmentBlob.id))) == 1
+
+    def test_the_document_is_returned_once(self, db_session, circulated):
+        hits, _total = search_documents(db_session, None, "faktura")
+        assert len(hits) == 1
+
+    def test_the_total_counts_documents_not_copies(self, db_session, circulated):
+        """A count of three told the reader there were three invoices."""
+        _hits, total = search_documents(db_session, None, "faktura")
+        assert total == 1
+
+    def test_the_hit_says_how_many_messages_carried_it(self, db_session, circulated):
+        hits, _total = search_documents(db_session, None, "faktura")
+        assert hits[0].copies == 3
+
+    def test_a_document_in_one_message_reports_one_copy(self, db_session, synced, local_storage):
+        extract_pending(db_session, local_storage)
+        hits, _total = search_documents(db_session, None, "CMR")
+        assert hits and hits[0].copies == 1
+
+    def test_the_named_attachment_is_stable_across_searches(self, db_session, circulated):
+        """A hit must point at the same message every time it is found."""
+        first, _ = search_documents(db_session, None, "faktura")
+        second, _ = search_documents(db_session, None, "splatnost")
+        assert first[0].attachment.id == second[0].attachment.id
+
+
+class TestRedo:
+    """A file read correctly by a worse parser keeps its worse text for ever."""
+
+    @pytest.fixture
+    def stale(self, db_session, account, local_storage):
+        """A container whose stored text predates a fix to the walker."""
+        from app.db.models import AttachmentBlob, DocumentText
+
+        messages = [message_with("z1", "Spis.zip", "application/zip", "tok-zip", "z1")]
+        SyncEngine(
+            session=db_session,
+            account=account,
+            client=FakeGmailClient(
+                messages,
+                attachments={"tok-zip": make_zip({"Rozsudok.txt": b"Sud rozhodol"})},
+            ),
+            storage=local_storage,
+            default_start_date=date(2025, 1, 1),
+            download_attachments=True,
+        ).initial_sync()
+
+        blob = db_session.scalars(select(AttachmentBlob)).first()
+        db_session.add(
+            DocumentText(
+                blob_id=blob.id,
+                status="extracted",
+                method="zip-container",
+                text="## __MACOSX/._Rozsudok.txt\n[no text (failed)]",
+                char_count=46,
+                extracted_at=datetime.now(UTC) - timedelta(days=1),
+            )
+        )
+        db_session.flush()
+        return blob
+
+    def test_an_ordinary_run_leaves_it_alone(self, db_session, stale):
+        assert extraction_summary(db_session)["pending"] == 0
+
+    def test_a_retry_leaves_it_alone_too(self, db_session, stale):
+        """It produced text, so it is not in the retry set — that is the trap."""
+        assert extraction_summary(db_session, retry_failed=True)["pending"] == 0
+
+    def test_a_redo_run_counts_it(self, db_session, stale):
+        started = datetime.now(UTC)
+        assert extraction_summary(db_session, redo=True, since=started)["pending"] == 1
+
+    def test_a_redo_run_replaces_the_stale_text(self, db_session, stale, local_storage):
+        from app.db.models import DocumentText
+
+        started = datetime.now(UTC)
+        stats = extract_pending(db_session, local_storage, redo=True, since=started)
+        assert stats.considered == 1
+
+        document = db_session.scalar(select(DocumentText).where(DocumentText.blob_id == stale.id))
+        assert "Sud rozhodol" in document.text
+        assert "__MACOSX" not in document.text
+
+    def test_a_redo_run_settles_what_it_read(self, db_session, stale, local_storage):
+        """Otherwise the loop would re-read the same file until interrupted."""
+        started = datetime.now(UTC)
+        extract_pending(db_session, local_storage, redo=True, since=started)
+        assert extraction_summary(db_session, redo=True, since=started)["pending"] == 0

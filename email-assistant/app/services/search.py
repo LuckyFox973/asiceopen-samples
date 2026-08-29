@@ -13,11 +13,10 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Select, and_, func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.db.models import (
     Attachment,
-    AttachmentBlob,
     DocumentText,
     EmailMessage,
     EmailParticipant,
@@ -219,6 +218,10 @@ class DocumentHit:
     document: DocumentText
     rank: float | None = None
     headline: str | None = None
+    # How many messages carried this exact file. Text hangs off the blob, so
+    # one document can have many attachment rows; *attachment* is the earliest
+    # of them, and this says how many others there are.
+    copies: int = 1
 
 
 def search_documents(
@@ -241,25 +244,51 @@ def search_documents(
     tsquery = func.websearch_to_tsquery(TS_CONFIG, text_query.strip())
     rank = func.ts_rank_cd(DocumentText.search_vector, tsquery)
 
-    stmt = (
-        select(Attachment, DocumentText, rank.label("rank"))
-        .join(AttachmentBlob, Attachment.blob_id == AttachmentBlob.id)
-        .join(DocumentText, DocumentText.blob_id == AttachmentBlob.id)
-        .where(DocumentText.search_vector.op("@@")(tsquery))
+    # One row per *document*, not per attachment.  Storage is content
+    # addressed, so an invoice sent to three people is one blob and three
+    # attachment rows; joining naively returned the same document three times
+    # and counted it three times in the total.
+    carriers = (
+        select(
+            Attachment.blob_id.label("blob_id"),
+            func.min(Attachment.created_at).label("first_seen"),
+            func.count(Attachment.id).label("copies"),
+        )
+        .where(Attachment.blob_id.is_not(None))
+        .group_by(Attachment.blob_id)
     )
     if account_id is not None:
-        stmt = stmt.where(Attachment.account_id == account_id)
+        carriers = carriers.where(Attachment.account_id == account_id)
+    carriers = carriers.subquery()
+
+    # The attachment shown is the earliest one, so the name and the message a
+    # hit points at are stable between searches.
+    earliest = (
+        select(Attachment)
+        .join(carriers, Attachment.blob_id == carriers.c.blob_id)
+        .where(Attachment.created_at == carriers.c.first_seen)
+        .distinct(Attachment.blob_id)
+        .subquery()
+    )
+    representative = aliased(Attachment, earliest)
+
+    stmt = (
+        select(representative, DocumentText, rank.label("rank"), carriers.c.copies)
+        .join(carriers, carriers.c.blob_id == DocumentText.blob_id)
+        .join(earliest, earliest.c.blob_id == DocumentText.blob_id)
+        .where(DocumentText.search_vector.op("@@")(tsquery))
+    )
 
     total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
     stmt = (
-        stmt.order_by(rank.desc(), Attachment.created_at.desc())
+        stmt.order_by(rank.desc(), carriers.c.first_seen.desc())
         .limit(max(1, min(limit, 100)))
         .offset(max(0, offset))
     )
 
     hits: list[DocumentHit] = []
-    for attachment, document, rank_value in session.execute(stmt).all():
+    for attachment, document, rank_value, copies in session.execute(stmt).all():
         headline = None
         if with_highlight and document.text:
             headline = session.scalar(
@@ -268,7 +297,9 @@ def search_documents(
                         TS_CONFIG,
                         document.text,
                         tsquery,
-                        text("'MaxWords=35, MinWords=15, MaxFragments=2'"),
+                        # The default StartSel/StopSel are <b> and </b>,
+                        # which is markup in a terminal, not emphasis.
+                        text("'MaxWords=35, MinWords=15, MaxFragments=2, StartSel=«, StopSel=»'"),
                     )
                 )
             )
@@ -278,6 +309,7 @@ def search_documents(
                 document=document,
                 rank=float(rank_value or 0.0),
                 headline=headline,
+                copies=int(copies or 1),
             )
         )
     return hits, total

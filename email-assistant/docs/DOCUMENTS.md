@@ -113,6 +113,32 @@ other hides a scan.
 A password-protected PDF gets its own status too — `encrypted`. It is not
 broken, and the recipient generally knows the password; it only needs saying.
 
+## Re-reading what is already stored
+
+Three commands, meaning three different things:
+
+| | What it reads |
+|---|---|
+| `extract` | Files with no result at all |
+| `extract --retry-failed` | Also everything that produced no text — use after a new format is added, since `unsupported` describes the extractor of the day, not the file |
+| `extract --redo` | Everything, including files that succeeded — use after the *quality* of an extractor changes, since a file read correctly by a worse parser keeps its worse text for ever |
+
+Each run marks what it looked at, so a scan that stays a scan does not come
+round again for as long as the loop runs.
+
+## Searching documents
+
+Search returns one row per **document**, not per attachment. Storage is
+content addressed, so an invoice sent to three people is one blob and three
+attachment rows; joining naively returned the same invoice three times and
+told the reader there were three of them. A hit names the earliest attachment
+— so it points at the same message every time — and says how many messages
+carried the file.
+
+Matches are marked with `«guillemets»` rather than `<b>`. `ts_headline` does
+not escape the document it marks up, so HTML markers around attacker-supplied
+text would be an injection waiting for the first web view of a result.
+
 ## OCR
 
 A photographed page and a scanned filing carry no text layer, so no parser

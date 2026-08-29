@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import exists, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -78,7 +78,7 @@ class ExtractionRunStats:
                 self.failed += 1
 
 
-def _already_done(retry_failed: bool, since: datetime | None = None):
+def _already_done(retry_failed: bool, since: datetime | None = None, redo: bool = False):
     """The single definition of "this blob has been dealt with".
 
     Shared deliberately: when the count and the query disagreed about it, the
@@ -90,6 +90,16 @@ def _already_done(retry_failed: bool, since: datetime | None = None):
     Having been looked at during this run is what counts as dealt with,
     whatever status it landed on.
     """
+    if redo:
+        # Nothing counts as done except having been read during this run: a
+        # container extracted by an older, worse walker is `extracted` and
+        # keeps its stale text for ever otherwise.
+        if since is None:
+            return exists().where(DocumentText.blob_id == AttachmentBlob.id, false())
+        return exists().where(
+            DocumentText.blob_id == AttachmentBlob.id, DocumentText.extracted_at >= since
+        )
+
     if not retry_failed:
         return exists().where(DocumentText.blob_id == AttachmentBlob.id)
 
@@ -104,11 +114,12 @@ def pending_blobs(
     limit: int | None = None,
     retry_failed: bool = False,
     since: datetime | None = None,
+    redo: bool = False,
 ) -> list[AttachmentBlob]:
     """Stored files with no usable extraction result yet."""
     stmt = (
         select(AttachmentBlob)
-        .where(~_already_done(retry_failed, since))
+        .where(~_already_done(retry_failed, since, redo))
         .order_by(AttachmentBlob.first_seen_at.desc().nullslast())
     )
     if limit:
@@ -286,10 +297,11 @@ def extract_pending(
     limit: int | None = 100,
     retry_failed: bool = False,
     since: datetime | None = None,
+    redo: bool = False,
 ) -> ExtractionRunStats:
     """Extract every stored file that has no result yet."""
     stats = ExtractionRunStats()
-    blobs = pending_blobs(session, limit=limit, retry_failed=retry_failed, since=since)
+    blobs = pending_blobs(session, limit=limit, retry_failed=retry_failed, since=since, redo=redo)
 
     for blob in blobs:
         # A savepoint per file: one unparseable document rolls back alone.
@@ -499,7 +511,10 @@ def normalise_ocr_text(text: str) -> str:
 
 
 def extraction_summary(
-    session: Session, retry_failed: bool = False, since: datetime | None = None
+    session: Session,
+    retry_failed: bool = False,
+    since: datetime | None = None,
+    redo: bool = False,
 ) -> dict[str, int]:
     """Counts by status, plus how many stored files are still to be read.
 
@@ -516,7 +531,7 @@ def extraction_summary(
     summary = {status: int(counts.get(status, 0)) for status in (s.value for s in ExtractionStatus)}
     summary["pending"] = (
         session.scalar(
-            select(func.count(AttachmentBlob.id)).where(~_already_done(retry_failed, since))
+            select(func.count(AttachmentBlob.id)).where(~_already_done(retry_failed, since, redo))
         )
         or 0
     )

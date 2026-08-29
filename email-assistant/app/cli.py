@@ -479,7 +479,8 @@ def _extract_batch(
             session,
             build_storage(),
             limit=args.limit,
-            retry_failed=args.retry_failed,
+            retry_failed=args.retry_failed or args.redo,
+            redo=args.redo,
             since=since,
         )
         counts = {
@@ -494,9 +495,12 @@ def _extract_batch(
             "failed": stats.failed,
         }
         session.flush()
-        remaining = extraction_summary(session, retry_failed=args.retry_failed, since=since)[
-            "pending"
-        ]
+        remaining = extraction_summary(
+            session,
+            retry_failed=args.retry_failed or args.redo,
+            redo=args.redo,
+            since=since,
+        )["pending"]
         return counts, remaining, list(stats.errors)
 
 
@@ -549,7 +553,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
     # A retry re-reads files that may well land on a retryable status again —
     # a scan is still a scan.  What settles them is having been looked at
     # during this run, so the run needs a starting mark.
-    since = datetime.now(UTC) if args.retry_failed else None
+    since = datetime.now(UTC) if (args.retry_failed or args.redo) else None
 
     with session_scope() as session:
         remaining = extraction_summary(session, retry_failed=args.retry_failed, since=since)[
@@ -753,9 +757,13 @@ def cmd_find(args: argparse.Namespace) -> int:
         print(f"{total} document(s) match; showing {len(hits)}\n")
         for hit in hits:
             pages = f", {hit.document.page_count} pages" if hit.document.page_count else ""
-            print(f"{hit.attachment.filename or '(unnamed)'}{pages}")
+            copies = f", in {hit.copies} messages" if hit.copies > 1 else ""
+            print(f"{hit.attachment.filename or '(unnamed)'}{pages}{copies}")
             if hit.headline:
-                print(f"    {hit.headline}")
+                for line in hit.headline.splitlines():
+                    if line.strip():
+                        print(f"    {line.strip()}")
+            print(f"    attachment={hit.attachment.id}")
             print()
     return 0
 
@@ -1189,6 +1197,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     extract_parser.add_argument(
         "--problems", action="store_true", help="list the files that could not be read"
+    )
+    extract_parser.add_argument(
+        "--redo",
+        action="store_true",
+        help="read every stored file again, including ones that succeeded",
     )
     extract_parser.set_defaults(func=cmd_extract)
 
