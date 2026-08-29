@@ -42,6 +42,7 @@ class ExtractionRunStats:
     empty: int = 0
     needs_ocr: int = 0
     encrypted: int = 0
+    not_a_document: int = 0
     unsupported: int = 0
     failed: int = 0
     characters: int = 0
@@ -59,6 +60,8 @@ class ExtractionRunStats:
                 self.needs_ocr += 1
             case ExtractionStatus.ENCRYPTED:
                 self.encrypted += 1
+            case ExtractionStatus.NOT_A_DOCUMENT:
+                self.not_a_document += 1
             case ExtractionStatus.UNSUPPORTED:
                 self.unsupported += 1
             case ExtractionStatus.FAILED:

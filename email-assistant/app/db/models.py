@@ -506,7 +506,8 @@ class DocumentText(Base, TimestampMixin):
         Index("ix_document_text_status", "status"),
         Index("ix_document_text_search", "search_vector", postgresql_using="gin"),
         CheckConstraint(
-            "status IN ('extracted','empty','needs_ocr','encrypted','unsupported','failed')",
+            "status IN ('extracted','empty','needs_ocr','encrypted','not_a_document',"
+            "'unsupported','failed')",
             name="status_valid",
         ),
     )

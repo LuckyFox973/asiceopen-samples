@@ -11,13 +11,17 @@ from app.services.extraction import (
     ExtractionStatus,
     detect_kind,
     extract,
+    image_size,
     normalise,
     strip_html,
 )
 from tests.fixtures.documents import (
     make_broken_zip,
     make_docx,
+    make_gif,
+    make_jpeg,
     make_pdf,
+    make_png,
     make_scanned_pdf,
     make_xlsx,
 )
@@ -136,8 +140,9 @@ class TestTextFormats:
 
 
 class TestUnsupported:
-    def test_image_is_flagged_for_ocr(self):
-        result = extract(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100, "image/png", "sken.png")
+    def test_a_page_sized_image_is_flagged_for_ocr(self):
+        page = make_png(1700, 2200) + b"\x00" * 60_000
+        result = extract(page, "image/png", "sken.png")
         assert result.status is ExtractionStatus.NEEDS_OCR
 
     def test_legacy_doc_is_unsupported_not_failed(self):
@@ -145,9 +150,11 @@ class TestUnsupported:
         assert result.status is ExtractionStatus.UNSUPPORTED
         assert "stare.doc" in result.error
 
-    def test_zip_that_is_not_office_is_unsupported(self):
+    def test_a_zip_of_documents_is_walked_rather_than_refused(self):
+        """Archives used to be dropped whole; their contents are the point."""
         result = extract(make_broken_zip(), "application/zip", "archiv.zip")
-        assert result.status is ExtractionStatus.UNSUPPORTED
+        assert result.status is ExtractionStatus.EXTRACTED
+        assert "not an office document" in result.text
 
     def test_empty_input(self):
         assert extract(b"").status is ExtractionStatus.EMPTY
@@ -241,3 +248,52 @@ class TestEncryptedPdf:
 
         result = extract(buffer.getvalue(), mime_type="application/pdf", filename="Open.pdf")
         assert result.status is not ExtractionStatus.ENCRYPTED
+
+
+class TestImageClassification:
+    """A photographed contract and a signature logo are both images with no
+    text layer. Reporting both as "needs OCR" buries the one that matters."""
+
+    def test_a_tracking_pixel_is_not_a_document(self):
+        result = extract(make_gif(1, 1), mime_type="image/gif", filename="cleardot.gif")
+        assert result.status is ExtractionStatus.NOT_A_DOCUMENT
+
+    def test_a_signature_logo_is_not_a_document(self):
+        result = extract(make_png(120, 40), mime_type="image/png", filename="logo.png")
+        assert result.status is ExtractionStatus.NOT_A_DOCUMENT
+        assert "120x40" in (result.error or "")
+
+    def test_a_photographed_page_is_worth_ocr(self):
+        page = make_jpeg(2400, 3200) + b"\x00" * 50_000
+        result = extract(page, mime_type="image/jpeg", filename="IMG_0085.JPG")
+        assert result.status is ExtractionStatus.NEEDS_OCR
+
+    def test_an_smime_signature_block_is_not_a_document(self):
+        result = extract(
+            b"\x30\x82\x04\x00 fake pkcs7",
+            mime_type="application/x-pkcs7-signature",
+            filename="smime.p7s",
+        )
+        assert result.status is ExtractionStatus.NOT_A_DOCUMENT
+
+    def test_an_unreadable_header_is_given_the_benefit_of_the_doubt(self):
+        """Guessing wrong must hide no scan; size is the only other signal."""
+        result = extract(b"\xff\xd8" + b"\x00" * 60_000, mime_type="image/jpeg", filename="x.jpg")
+        assert result.status is ExtractionStatus.NEEDS_OCR
+
+
+class TestImageSize:
+    @pytest.mark.parametrize("width,height", [(1, 1), (120, 40), (2400, 3200)])
+    def test_png_dimensions_are_read_from_the_header(self, width, height):
+        assert image_size(make_png(width, height)) == (width, height)
+
+    @pytest.mark.parametrize("width,height", [(1, 1), (640, 480)])
+    def test_gif_dimensions_are_read_from_the_header(self, width, height):
+        assert image_size(make_gif(width, height)) == (width, height)
+
+    @pytest.mark.parametrize("width,height", [(16, 16), (2400, 3200)])
+    def test_jpeg_dimensions_come_from_the_frame_marker(self, width, height):
+        assert image_size(make_jpeg(width, height)) == (width, height)
+
+    def test_an_unknown_format_reports_nothing_rather_than_guessing(self):
+        assert image_size(b"not an image at all") is None

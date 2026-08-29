@@ -35,6 +35,7 @@ class ExtractionStatus(StrEnum):
     EMPTY = "empty"  # parsed fine, genuinely contains no text
     NEEDS_OCR = "needs_ocr"  # almost certainly a scan
     ENCRYPTED = "encrypted"  # readable, but locked with a password we do not have
+    NOT_A_DOCUMENT = "not_a_document"  # transport plumbing, not something a person sent
     UNSUPPORTED = "unsupported"
     FAILED = "failed"
 
@@ -87,15 +88,46 @@ TEXT_TYPES = {
 }
 HTML_TYPES = {"text/html", "application/xhtml+xml"}
 IMAGE_PREFIX = "image/"
-# Legacy Office and other binaries we deliberately do not guess at.
+# Legacy Office and other binaries we deliberately do not guess at.  Note that
+# the zip types are absent: archives are walked now, and listing them here
+# would send a container whose header is not at byte zero to UNSUPPORTED.
 KNOWN_UNSUPPORTED = {
     "application/msword",
     "application/vnd.ms-excel",
     "application/vnd.ms-powerpoint",
-    "application/zip",
     "application/x-rar-compressed",
-    "application/octet-stream",
 }
+
+CONTAINER_TYPES = {
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/vnd.etsi.asic-e+zip",
+    "application/vnd.etsi.asic-s+zip",
+}
+# mimetypes maps .sce to Scilab and .scs to an SCVP response, so the Slovak
+# container suffixes are named here rather than deferred to any table.
+CONTAINER_SUFFIXES = {"zip", "asice", "asics", "sce", "scs", "isdocx"}
+
+XML_DOCUMENT_TYPES = {"application/xop+xml", "application/isdoc+xml"}
+XML_DOCUMENT_SUFFIXES = {"isdoc"}
+
+CALENDAR_TYPES = {"text/calendar", "application/ics", "text/x-vcalendar"}
+
+# Signature blocks and the like: produced by the mail system, carrying nothing
+# a person wrote.  Reporting them as unreadable asks the owner to solve a
+# problem that is not one.
+NOT_A_DOCUMENT_TYPES = {
+    "application/pkcs7-signature",
+    "application/x-pkcs7-signature",
+    "application/pkcs7-mime",
+    "application/pgp-signature",
+}
+NOT_A_DOCUMENT_SUFFIXES = {"p7s", "p7m", "asc"}
+# Gmail's transparent spacer, and the like.
+TRACKING_PIXEL_NAMES = {"cleardot.gif", "spacer.gif", "pixel.gif", "1x1.gif", "blank.gif"}
+# Below this an image is a logo or an icon; there is no document in it to read.
+MIN_OCR_WORTHY_PIXELS = 160
+MIN_OCR_WORTHY_BYTES = 20_000
 
 
 def detect_kind(mime_type: str | None, filename: str | None, data: bytes) -> str:
@@ -107,10 +139,24 @@ def detect_kind(mime_type: str | None, filename: str | None, data: bytes) -> str
         office = _office_kind_from_zip(data)
         if office:
             return office
+        from app.services.containers import container_kind
+
+        if container_kind(data) is not None:
+            return "container"
 
     mime = (mime_type or "").split(";")[0].strip().lower()
     suffix = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
 
+    if mime in NOT_A_DOCUMENT_TYPES or suffix in NOT_A_DOCUMENT_SUFFIXES:
+        return "not_a_document"
+    if mime in CALENDAR_TYPES or suffix == "ics":
+        return "calendar"
+    if mime in XML_DOCUMENT_TYPES or suffix in XML_DOCUMENT_SUFFIXES:
+        return "xmldoc"
+    if mime in CONTAINER_TYPES or suffix in CONTAINER_SUFFIXES:
+        # A container may carry prepended bytes, so the magic-byte gate above
+        # can miss one that zipfile opens perfectly well.
+        return "container" if _looks_like_zip(data) else "unknown"
     if mime in PDF_TYPES or suffix == "pdf":
         return "pdf"
     if mime in DOCX_TYPES or suffix == "docx":
@@ -126,6 +172,94 @@ def detect_kind(mime_type: str | None, filename: str | None, data: bytes) -> str
     if mime in KNOWN_UNSUPPORTED:
         return "unsupported"
     return "unknown"
+
+
+def image_size(data: bytes) -> tuple[int, int] | None:
+    """Pixel dimensions from the file header, with no imaging dependency.
+
+    Only the three formats that actually turn up in mail. Returning None means
+    "could not tell", which is treated as "might be a document" — the safe
+    direction, since the cost of guessing wrong is hiding a real scan.
+    """
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        return (
+            int.from_bytes(data[16:20], "big"),
+            int.from_bytes(data[20:24], "big"),
+        )
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return (
+            int.from_bytes(data[6:8], "little"),
+            int.from_bytes(data[8:10], "little"),
+        )
+    if data[:2] == b"\xff\xd8":
+        return _jpeg_size(data)
+    return None
+
+
+def _jpeg_size(data: bytes) -> tuple[int, int] | None:
+    """Walk the segment chain to the start-of-frame marker."""
+    index = 2
+    limit = len(data)
+    while index + 9 < limit:
+        if data[index] != 0xFF:
+            index += 1
+            continue
+        marker = data[index + 1]
+        # Standalone markers carry no length; restart markers and padding too.
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7 or marker == 0xFF:
+            index += 2
+            continue
+        length = int.from_bytes(data[index + 2 : index + 4], "big")
+        if length < 2:
+            return None
+        # SOF0-SOF15, excluding the four that are not frame headers.
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height = int.from_bytes(data[index + 5 : index + 7], "big")
+            width = int.from_bytes(data[index + 7 : index + 9], "big")
+            return width, height
+        index += 2 + length
+    return None
+
+
+def _classify_image(data: bytes, filename: str | None) -> ExtractionResult:
+    """Is this a document someone photographed, or furniture from a signature?
+
+    Both are images with no text layer, and calling both "needs OCR" buries
+    the two scans that matter under twenty logos and a tracking pixel.
+    """
+    name = (filename or "").strip().lower()
+    if name in TRACKING_PIXEL_NAMES:
+        return ExtractionResult(
+            ExtractionStatus.NOT_A_DOCUMENT,
+            method="none",
+            error="Tracking pixel embedded by the mail client.",
+        )
+
+    size = image_size(data)
+    if size is not None:
+        width, height = size
+        if width and height and (width < MIN_OCR_WORTHY_PIXELS or height < MIN_OCR_WORTHY_PIXELS):
+            return ExtractionResult(
+                ExtractionStatus.NOT_A_DOCUMENT,
+                method="none",
+                error=f"Decorative image, {width}x{height} — too small to hold a document.",
+            )
+    if len(data) < MIN_OCR_WORTHY_BYTES:
+        return ExtractionResult(
+            ExtractionStatus.NOT_A_DOCUMENT,
+            method="none",
+            error=f"Decorative image, {len(data):,} bytes — too small to hold a document.",
+        )
+
+    return ExtractionResult(
+        ExtractionStatus.NEEDS_OCR,
+        method="none",
+        error="Photograph or scan: OCR is not enabled, so its text is not searchable.",
+    )
+
+
+def _looks_like_zip(data: bytes) -> bool:
+    return zipfile.is_zipfile(io.BytesIO(data))
 
 
 def _office_kind_from_zip(data: bytes) -> str | None:
@@ -237,6 +371,51 @@ def extract_xlsx(data: bytes) -> ExtractionResult:
     return _finish(normalise("\n".join(lines)), "openpyxl")
 
 
+def extract_container(data: bytes) -> ExtractionResult:
+    """Every document inside an archive, under its own heading.
+
+    ASiC-E and ASiC-S — Slovak e-filings and guaranteed conversions — are ZIPs
+    whose payload sits at the root beside a ``META-INF`` directory of
+    signatures.  The signatures are structure; the documents are what matter.
+    """
+    from app.services.containers import container_kind, render, walk
+
+    def extract_member(payload: bytes, name: str) -> tuple[str, str]:
+        # Deliberately not passing the container's declared media type: the
+        # manifest inside is written by whoever built the archive.
+        result = extract(payload, mime_type=None, filename=name)
+        return result.status.value, result.text
+
+    kind = container_kind(data) or "zip"
+    members = walk(data, extract_member)
+    text = normalise(render(members))
+    if not text:
+        return ExtractionResult(
+            ExtractionStatus.EMPTY,
+            method=f"{kind}-container",
+            error="Archive holds no readable document.",
+        )
+    return _finish(text, f"{kind}-container")
+
+
+def extract_calendar(data: bytes) -> ExtractionResult:
+    """A meeting invitation as text: what, when, where, and who called it."""
+    from app.services.icalendar_text import read_calendar
+
+    return _finish(normalise(read_calendar(data, strip_html)), "ics")
+
+
+def extract_xml_document(data: bytes) -> ExtractionResult:
+    """A structured XML document — an ISDOC invoice, a filled-in form."""
+    from app.services.xml_text import read_xml
+
+    text = read_xml(data)
+    if not text:
+        # Not valid XML after all; the raw text is still better than nothing.
+        return extract_text_file(data)
+    return _finish(normalise(text), "xml-structured")
+
+
 def extract_text_file(data: bytes) -> ExtractionResult:
     for charset in ("utf-8", "windows-1250", "iso-8859-2", "latin-1"):
         try:
@@ -319,6 +498,9 @@ _EXTRACTORS = {
     "xlsx": extract_xlsx,
     "html": extract_html,
     "text": extract_text_file,
+    "container": extract_container,
+    "calendar": extract_calendar,
+    "xmldoc": extract_xml_document,
 }
 
 
@@ -331,12 +513,14 @@ def extract(
 
     kind = detect_kind(mime_type, filename, data)
 
-    if kind == "image":
+    if kind == "not_a_document":
         return ExtractionResult(
-            ExtractionStatus.NEEDS_OCR,
+            ExtractionStatus.NOT_A_DOCUMENT,
             method="none",
-            error="Image attachment: OCR is not enabled.",
+            error="Signature block produced by the mail system, not a document.",
         )
+    if kind == "image":
+        return _classify_image(data, filename)
     if kind in {"unsupported", "unknown"}:
         return ExtractionResult(
             ExtractionStatus.UNSUPPORTED,

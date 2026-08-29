@@ -173,3 +173,121 @@ def make_docx_with_revisions(
                 "</w:comment></w:comments>",
             )
     return out.getvalue()
+
+
+def make_zip(members: dict[str, bytes], compress: bool = True) -> bytes:
+    """A ZIP holding *members*, in the given order."""
+    import zipfile
+
+    buffer = io.BytesIO()
+    mode = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
+    with zipfile.ZipFile(buffer, "w", mode) as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+def make_asice(payloads: dict[str, bytes]) -> bytes:
+    """A container shaped like the real ASiC-E samples in this repository.
+
+    mimetype first, payloads at the root, signatures and manifest under
+    META-INF — the layout verified against sample1.asice and sample2.asice.
+    """
+    members: dict[str, bytes] = {"mimetype": b"application/vnd.etsi.asic-e+zip"}
+    members.update(payloads)
+    entries = "".join(
+        f'<manifest:file-entry manifest:full-path="{name}" manifest:media-type="application/pdf"/>'
+        for name in payloads
+    )
+    members["META-INF/manifest.xml"] = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">'
+        '<manifest:file-entry manifest:full-path="/" '
+        'manifest:media-type="application/vnd.etsi.asic-e+zip"/>'
+        f"{entries}</manifest:manifest>"
+    ).encode()
+    members["META-INF/signatures0.xml"] = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<XAdESSignatures xmlns="http://uri.etsi.org/2918/v1.2.1#">'
+        b'<Signature xmlns="http://www.w3.org/2000/09/xmldsig#">'
+        b"<SignatureValue>PODPIS-NEOVERENY</SignatureValue>"
+        b"</Signature></XAdESSignatures>"
+    )
+    return make_zip(members)
+
+
+def make_zip_bomb(uncompressed_bytes: int = 20 * 1024 * 1024) -> bytes:
+    """A small archive whose single member declares an enormous size."""
+    return make_zip({"bomb.txt": b"\0" * uncompressed_bytes})
+
+
+def make_ics(body: str, newline: str = "\r\n", encoding: str = "utf-8") -> bytes:
+    """A VCALENDAR wrapper around *body*, with the given line ending."""
+    text = f"BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Test//EN\n{body}\nEND:VCALENDAR\n"
+    return text.replace("\n", newline).encode(encoding)
+
+
+def make_isdoc(number: str = "2026045", total: str = "1250.50") -> bytes:
+    """An ISDOC-shaped invoice: the real namespace, a plausible element tree."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Invoice xmlns="http://isdoc.cz/namespace/2013" version="6.0.2">'
+        f"<ID>{number}</ID>"
+        "<IssueDate>2026-03-01</IssueDate>"
+        "<AccountingSupplierParty><Party><PartyName>"
+        "<Name>Stavby s.r.o.</Name></PartyName></Party></AccountingSupplierParty>"
+        "<PaymentMeans><Payment><Details>"
+        "<IBAN>SK3112000000198742637541</IBAN>"
+        "<VariableSymbol>2026045</VariableSymbol>"
+        "</Details></Payment></PaymentMeans>"
+        f"<LegalMonetaryTotal><PayableAmount>{total}</PayableAmount></LegalMonetaryTotal>"
+        "</Invoice>"
+    ).encode()
+
+
+def make_png(width: int, height: int) -> bytes:
+    """A PNG header with real dimensions — enough for a size probe."""
+    import struct
+    import zlib
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    chunk = struct.pack(">I", len(ihdr)) + b"IHDR" + ihdr
+    chunk += struct.pack(">I", zlib.crc32(b"IHDR" + ihdr) & 0xFFFFFFFF)
+    return b"\x89PNG\r\n\x1a\n" + chunk
+
+
+def make_gif(width: int, height: int) -> bytes:
+    import struct
+
+    return b"GIF89a" + struct.pack("<HH", width, height) + b"\x00\x00\x00"
+
+
+def make_jpeg(width: int, height: int) -> bytes:
+    """A JPEG whose APP0 and SOF0 segments are both well formed.
+
+    The declared segment length has to match the payload: a reader walks the
+    chain by it, and one wrong length skips the frame header entirely.
+    """
+    import struct
+
+    # APP0/JFIF: identifier(5) version(2) units(1) density(4) thumbnail(2).
+    app0_payload = b"JFIF\x00" + bytes([1, 1, 0]) + struct.pack(">HH", 72, 72) + b"\x00\x00"
+    app0 = b"\xff\xe0" + struct.pack(">H", 2 + len(app0_payload)) + app0_payload
+
+    # SOF0: precision(1) height(2) width(2) components(1) then 3 bytes each.
+    sof_payload = struct.pack(">BHHB", 8, height, width, 1) + bytes([1, 0x11, 0])
+    sof = b"\xff\xc0" + struct.pack(">H", 2 + len(sof_payload)) + sof_payload
+
+    return b"\xff\xd8" + app0 + sof + b"\xff\xd9"
+
+
+def make_locked_pdf(password: str = "s3cret") -> bytes:
+    """A PDF whose password we do not have."""
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.encrypt(password)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()

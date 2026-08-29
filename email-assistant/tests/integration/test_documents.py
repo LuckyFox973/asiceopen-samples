@@ -23,8 +23,8 @@ from app.services.sync import SyncEngine
 from tests.conftest import requires_db
 from tests.fixtures import attachment_part, gmail_message, multipart, text_part
 from tests.fixtures.documents import (
-    make_broken_zip,
     make_docx,
+    make_locked_pdf,
     make_pdf,
     make_scanned_pdf,
     make_xlsx,
@@ -318,19 +318,19 @@ class TestUnreadableReport:
 
     @pytest.fixture
     def mixed(self, db_session, account, local_storage):
-        """A scan, two copies of one .asice container, and a broken zip."""
-        asice = make_broken_zip()  # an ASiC-E container is a zip; this one is corrupt
+        """A scan, two copies of one locked PDF, and a legacy Word file."""
+        locked = make_locked_pdf()
         documents = {
             "tok-scan": make_scanned_pdf(),
-            "tok-asice": asice,
-            "tok-asice-again": asice,
-            "tok-zip": b"PK\x03\x04 not really a zip at all",
+            "tok-locked": locked,
+            "tok-locked-again": locked,
+            "tok-doc": b"\xd0\xcf\x11\xe0" + b"\x00" * 512,
         }
         messages = [
             message_with("u1", "Doruce.pdf", "application/pdf", "tok-scan", "u1"),
-            message_with("u2", "Podanie.asice", "application/zip", "tok-asice", "u2"),
-            message_with("u3", "Podanie.asice", "application/zip", "tok-asice-again", "u3"),
-            message_with("u4", "Prilohy.zip", "application/zip", "tok-zip", "u4"),
+            message_with("u2", "Faktura.pdf", "application/pdf", "tok-locked", "u2"),
+            message_with("u3", "Faktura.pdf", "application/pdf", "tok-locked-again", "u3"),
+            message_with("u4", "Stare.doc", "application/msword", "tok-doc", "u4"),
         ]
         SyncEngine(
             session=db_session,
@@ -345,18 +345,18 @@ class TestUnreadableReport:
 
     def test_files_are_grouped_by_extension(self, db_session, mixed):
         groups = {group.extension: group for group in unreadable_documents(db_session)}
-        assert ".asice" in groups
         assert ".pdf" in groups
+        assert ".doc" in groups
 
     def test_identical_copies_count_once_as_a_file_and_twice_as_a_copy(self, db_session, mixed):
-        """The same container in two messages is one problem, not two."""
-        asice = next(g for g in unreadable_documents(db_session) if g.extension == ".asice")
-        assert asice.files == 1
-        assert asice.copies == 2
+        """The same locked invoice in two messages is one problem, not two."""
+        locked = next(g for g in unreadable_documents(db_session) if g.status == "encrypted")
+        assert locked.files == 1
+        assert locked.copies == 2
 
     def test_a_scan_is_reported_as_needing_ocr(self, db_session, mixed):
-        scan = next(g for g in unreadable_documents(db_session) if g.extension == ".pdf")
-        assert scan.status == "needs_ocr"
+        scan = next(g for g in unreadable_documents(db_session) if g.status == "needs_ocr")
+        assert scan.extension == ".pdf"
         assert scan.example == "Doruce.pdf"
 
     def test_readable_files_are_absent(self, db_session, synced):

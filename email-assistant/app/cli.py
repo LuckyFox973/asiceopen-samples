@@ -475,6 +475,7 @@ def _extract_batch(args: argparse.Namespace) -> tuple[dict[str, int], int, list[
             "characters": stats.characters,
             "needs_ocr": stats.needs_ocr,
             "encrypted": stats.encrypted,
+            "not_a_document": stats.not_a_document,
             "unsupported": stats.unsupported,
             "empty": stats.empty,
             "failed": stats.failed,
@@ -497,6 +498,7 @@ def _report_unreadable() -> int:
     label = {
         "needs_ocr": "scan, no text layer",
         "encrypted": "password protected",
+        "not_a_document": "not a document",
         "unsupported": "format not supported",
         "failed": "could not be parsed",
     }
@@ -541,6 +543,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             "characters",
             "needs_ocr",
             "encrypted",
+            "not_a_document",
             "unsupported",
             "empty",
             "failed",
@@ -575,7 +578,8 @@ def cmd_extract(args: argparse.Namespace) -> int:
         f"\nDone. {totals['extracted']} extracted ({totals['characters']:,} characters), "
         f"{totals['needs_ocr']} need OCR, {totals['encrypted']} password protected, "
         f"{totals['unsupported']} unsupported, {totals['empty']} empty, "
-        f"{totals['failed']} failed."
+        f"{totals['failed']} failed. "
+        f"{totals['not_a_document']} were signature blocks or decoration, not documents."
     )
     if totals["needs_ocr"]:
         print("Scans need OCR, which is not built yet — their text is not searchable.")

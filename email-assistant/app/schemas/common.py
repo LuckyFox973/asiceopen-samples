@@ -121,6 +121,7 @@ class ExtractionSummaryOut(BaseModel):
     empty: int
     needs_ocr: int
     encrypted: int = 0
+    not_a_document: int = 0
     unsupported: int
     failed: int
     pending: int
