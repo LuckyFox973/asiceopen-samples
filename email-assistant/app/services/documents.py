@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
@@ -24,6 +25,13 @@ log = get_logger(__name__)
 
 # Statuses worth trying again: a transient failure, or OCR arriving later.
 RETRYABLE = {ExtractionStatus.FAILED.value}
+
+# Statuses that mean the file's contents are not searchable.
+UNREADABLE = (
+    ExtractionStatus.NEEDS_OCR.value,
+    ExtractionStatus.UNSUPPORTED.value,
+    ExtractionStatus.FAILED.value,
+)
 
 
 @dataclass
@@ -307,6 +315,75 @@ def extraction_summary(session: Session) -> dict[str, int]:
         or 0
     )
     return summary
+
+
+@dataclass
+class UnreadableGroup:
+    """Files sharing an extension that the extractor could not turn into text."""
+
+    status: str
+    extension: str
+    mime_type: str | None
+    files: int
+    copies: int
+    bytes_total: int
+    example: str | None
+    error: str | None
+
+
+def unreadable_documents(session: Session) -> list[UnreadableGroup]:
+    """What could not be read, grouped by extension, commonest first.
+
+    Deciding whether OCR or another format is worth building is a question
+    about which files were skipped, not how many — sixteen signature images
+    and sixteen court filings are the same number and not the same problem.
+    """
+    rows = session.execute(
+        select(
+            DocumentText.status,
+            DocumentText.error,
+            AttachmentBlob.id,
+            AttachmentBlob.mime_type,
+            AttachmentBlob.size_bytes,
+        )
+        .join(AttachmentBlob, AttachmentBlob.id == DocumentText.blob_id)
+        .where(DocumentText.status.in_(UNREADABLE))
+    ).all()
+
+    grouped: dict[tuple[str, str], dict] = {}
+    for status, error, blob_id, mime_type, size_bytes in rows:
+        names = session.execute(
+            select(Attachment.filename, func.count(Attachment.id))
+            .where(Attachment.blob_id == blob_id)
+            .group_by(Attachment.filename)
+            .order_by(func.count(Attachment.id).desc())
+        ).all()
+        filename = names[0][0] if names else None
+        copies = sum(count for _name, count in names) or 1
+        extension = Path(filename).suffix.lower() if filename else ""
+
+        entry = grouped.setdefault(
+            (status, extension or "(no extension)"),
+            {
+                "status": status,
+                "extension": extension or "(no extension)",
+                "mime_type": mime_type,
+                "files": 0,
+                "copies": 0,
+                "bytes_total": 0,
+                "example": filename,
+                "error": error,
+            },
+        )
+        entry["files"] += 1
+        entry["copies"] += copies
+        entry["bytes_total"] += size_bytes or 0
+        entry["error"] = entry["error"] or error
+
+    return sorted(
+        (UnreadableGroup(**entry) for entry in grouped.values()),
+        key=lambda group: (-group.copies, group.extension),
+    )
 
 
 def get_document_text(session: Session, attachment_id: uuid.UUID) -> DocumentText | None:

@@ -482,6 +482,37 @@ def _extract_batch(args: argparse.Namespace) -> tuple[dict[str, int], int, list[
         return counts, extraction_summary(session)["pending"], list(stats.errors)
 
 
+def _report_unreadable() -> int:
+    """What could not be read, grouped by extension, so it can be judged."""
+    from app.services.documents import unreadable_documents
+
+    with session_scope() as session:
+        groups = unreadable_documents(session)
+
+    if not groups:
+        print("Every stored file was read.")
+        return 0
+
+    label = {
+        "needs_ocr": "scan, no text layer",
+        "unsupported": "format not supported",
+        "failed": "could not be parsed",
+    }
+    print(f"{'files':>5} {'copies':>7}  {'type':<22} {'size':>9}  why")
+    for group in groups:
+        megabytes = group.bytes_total / 1_048_576
+        print(
+            f"{group.files:>5} {group.copies:>7}  {group.extension:<22} "
+            f"{megabytes:>7.1f} MB  {label.get(group.status, group.status)}"
+        )
+        if group.example:
+            print(f"{'':>14}e.g. {group.example}")
+        if group.error:
+            print(f"{'':>14}     {group.error[:120]}")
+    print("\n`copies` counts how often the file arrived; `files` counts distinct ones.")
+    return 0
+
+
 def cmd_extract(args: argparse.Namespace) -> int:
     """Extract text from every stored file, in batches, until none are left."""
     from app.services.documents import extraction_summary
@@ -491,6 +522,9 @@ def cmd_extract(args: argparse.Namespace) -> int:
             for key, value in extraction_summary(session).items():
                 print(f"{key:<12}: {value}")
         return 0
+
+    if args.problems:
+        return _report_unreadable()
 
     with session_scope() as session:
         remaining = extraction_summary(session)["pending"]
@@ -977,6 +1011,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     extract_parser.add_argument(
         "--once", action="store_true", help="do a single batch instead of finishing the queue"
+    )
+    extract_parser.add_argument(
+        "--problems", action="store_true", help="list the files that could not be read"
     )
     extract_parser.set_defaults(func=cmd_extract)
 

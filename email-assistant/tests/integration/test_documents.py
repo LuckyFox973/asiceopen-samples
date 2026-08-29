@@ -16,12 +16,19 @@ from app.services.documents import (
     extraction_summary,
     get_document_text,
     pending_blobs,
+    unreadable_documents,
 )
 from app.services.search import search_documents
 from app.services.sync import SyncEngine
 from tests.conftest import requires_db
 from tests.fixtures import attachment_part, gmail_message, multipart, text_part
-from tests.fixtures.documents import make_docx, make_pdf, make_xlsx
+from tests.fixtures.documents import (
+    make_broken_zip,
+    make_docx,
+    make_pdf,
+    make_scanned_pdf,
+    make_xlsx,
+)
 from tests.fixtures.fake_gmail import FakeGmailClient
 
 pytestmark = [pytest.mark.integration, requires_db]
@@ -304,3 +311,59 @@ class TestApi:
         after = client.get("/api/v1/documents/summary").json()
         assert after["extracted"] == 3
         assert after["pending"] == 0
+
+
+class TestUnreadableReport:
+    """Deciding whether OCR is worth building needs the files, not the count."""
+
+    @pytest.fixture
+    def mixed(self, db_session, account, local_storage):
+        """A scan, two copies of one .asice container, and a broken zip."""
+        asice = make_broken_zip()  # an ASiC-E container is a zip; this one is corrupt
+        documents = {
+            "tok-scan": make_scanned_pdf(),
+            "tok-asice": asice,
+            "tok-asice-again": asice,
+            "tok-zip": b"PK\x03\x04 not really a zip at all",
+        }
+        messages = [
+            message_with("u1", "Doruce.pdf", "application/pdf", "tok-scan", "u1"),
+            message_with("u2", "Podanie.asice", "application/zip", "tok-asice", "u2"),
+            message_with("u3", "Podanie.asice", "application/zip", "tok-asice-again", "u3"),
+            message_with("u4", "Prilohy.zip", "application/zip", "tok-zip", "u4"),
+        ]
+        SyncEngine(
+            session=db_session,
+            account=account,
+            client=FakeGmailClient(messages, attachments=documents),
+            storage=local_storage,
+            default_start_date=date(2025, 1, 1),
+            download_attachments=True,
+        ).initial_sync()
+        extract_pending(db_session, local_storage)
+        return account
+
+    def test_files_are_grouped_by_extension(self, db_session, mixed):
+        groups = {group.extension: group for group in unreadable_documents(db_session)}
+        assert ".asice" in groups
+        assert ".pdf" in groups
+
+    def test_identical_copies_count_once_as_a_file_and_twice_as_a_copy(self, db_session, mixed):
+        """The same container in two messages is one problem, not two."""
+        asice = next(g for g in unreadable_documents(db_session) if g.extension == ".asice")
+        assert asice.files == 1
+        assert asice.copies == 2
+
+    def test_a_scan_is_reported_as_needing_ocr(self, db_session, mixed):
+        scan = next(g for g in unreadable_documents(db_session) if g.extension == ".pdf")
+        assert scan.status == "needs_ocr"
+        assert scan.example == "Doruce.pdf"
+
+    def test_readable_files_are_absent(self, db_session, synced):
+        assert unreadable_documents(db_session) == []
+
+    def test_the_commonest_problem_comes_first(self, db_session, mixed):
+        groups = unreadable_documents(db_session)
+        assert [group.copies for group in groups] == sorted(
+            (group.copies for group in groups), reverse=True
+        )

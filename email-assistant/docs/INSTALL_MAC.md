@@ -140,6 +140,12 @@ Then pull the text out of the attachments:
 This also runs until the queue is empty. Scanned PDFs are reported as
 `need OCR` and stay unsearchable — OCR is not built yet.
 
+To see exactly which files could not be read, and how often each arrived:
+
+```bash
+./.venv/bin/python -m app.cli extract --problems
+```
+
 Then look at what it has:
 
 ```bash

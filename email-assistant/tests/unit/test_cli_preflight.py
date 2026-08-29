@@ -90,16 +90,11 @@ class TestSyncLoop:
     """`sync` keeps going until the mailbox is caught up, so a person does not have to."""
 
     @staticmethod
-    def _args(**overrides):
-        defaults = {
-            "account": "hello@example.sk",
-            "mode": "initial",
-            "start_date": None,
-            "no_attachments": False,
-            "once": False,
-        }
-        defaults.update(overrides)
-        return type("Args", (), defaults)()
+    def _args(*flags):
+        """Through the real parser, so a new option cannot drift out of these tests."""
+        return cli.build_parser().parse_args(
+            ["sync", "hello@example.sk", "--mode", "initial", *flags]
+        )
 
     @staticmethod
     def _counts(new=100):
@@ -145,7 +140,7 @@ class TestSyncLoop:
 
     def test_once_does_a_single_pass(self, monkeypatch, capsys):
         calls = self._record_passes(monkeypatch, [("partial", None, self._counts())])
-        assert cli.cmd_sync(self._args(once=True)) == 0
+        assert cli.cmd_sync(self._args("--once")) == 0
         assert len(calls) == 1
         assert "run the same command again" in capsys.readouterr().out
 
@@ -154,10 +149,8 @@ class TestExtractLoop:
     """`extract` works through the whole queue, not one batch of it."""
 
     @staticmethod
-    def _args(**overrides):
-        defaults = {"limit": 100, "retry_failed": False, "summary": False, "once": False}
-        defaults.update(overrides)
-        return type("Args", (), defaults)()
+    def _args(*flags):
+        return cli.build_parser().parse_args(["extract", *flags])
 
     @staticmethod
     def _counts(extracted=100, failed=0):
@@ -222,7 +215,7 @@ class TestExtractLoop:
 
     def test_once_does_a_single_batch(self, monkeypatch):
         calls = self._batches(monkeypatch, [(self._counts(), 437, [])], pending_at_start=537)
-        assert cli.cmd_extract(self._args(once=True)) == 0
+        assert cli.cmd_extract(self._args("--once")) == 0
         assert len(calls) == 1
 
 
