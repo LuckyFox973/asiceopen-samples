@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from urllib.parse import urlparse
 
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
@@ -1311,9 +1312,45 @@ def main(argv: list[str] | None = None) -> int:
         print("    brew services start postgresql@16", file=sys.stderr)
         print("\nThen run: python -m app.cli check", file=sys.stderr)
         return 1
+    except ValidationError as exc:
+        return _report_bad_configuration(exc)
     except KeyboardInterrupt:
         print("\nStopped. Nothing already stored is lost — run the same command to resume.")
         return 130
+
+
+def _report_bad_configuration(exc: ValidationError) -> int:
+    """Name the setting, show what it was given, and say where to fix it.
+
+    Pydantic's own report is twenty lines of traceback ending in a field name
+    nobody has typed — the file says SYNC_START_DATE, the error says
+    sync_start_date.
+    """
+    print("error: a setting in .env is not valid.\n", file=sys.stderr)
+    for problem in exc.errors():
+        field = ".".join(str(part) for part in problem.get("loc", ())) or "(unknown)"
+        given = problem.get("input", "")
+        print(f"  {field.upper()}", file=sys.stderr)
+        print(f"    given   : {given!r}", file=sys.stderr)
+        print(f"    problem : {problem.get('msg', 'invalid')}", file=sys.stderr)
+        if isinstance(given, str) and _looks_glued(given):
+            # The commonest cause by far: appending to a file whose last line
+            # had no newline, so two settings ended up on one.
+            print(
+                "    likely  : two settings ran together on one line — "
+                "a value was appended to a file with no trailing newline",
+                file=sys.stderr,
+            )
+    print("\nEdit .env, then run: python -m app.cli check", file=sys.stderr)
+    return 1
+
+
+_GLUED = re.compile(r"[A-Z][A-Z0-9_]{2,}=")
+
+
+def _looks_glued(value: str) -> bool:
+    """True when a value has another KEY= buried inside it."""
+    return bool(_GLUED.search(value))
 
 
 def _first_line(exc: Exception) -> str:

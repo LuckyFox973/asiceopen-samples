@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import socket
+from datetime import date
 
 import pytest
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import OperationalError
 
 from app import cli
@@ -309,3 +311,62 @@ class TestExtractionScope:
         assert seen, "the summary was never consulted"
         assert seen[0]["redo"] is True
         assert seen[0]["since"] is not None
+
+
+class TestBrokenConfiguration:
+    """A malformed .env must read like a sentence, not a pydantic traceback."""
+
+    @staticmethod
+    def _error(field: str, value: str) -> ValidationError:
+        class Probe(BaseModel):
+            sync_start_date: date
+
+        try:
+            Probe(**{field: value})
+        except ValidationError as exc:
+            return exc
+        raise AssertionError("the probe was supposed to fail")  # pragma: no cover
+
+    def test_the_setting_is_named_the_way_the_file_spells_it(self, capsys):
+        """The file says SYNC_START_DATE; pydantic says sync_start_date."""
+        cli._report_bad_configuration(self._error("sync_start_date", "not-a-date"))
+        assert "SYNC_START_DATE" in capsys.readouterr().err
+
+    def test_the_offending_value_is_shown(self, capsys):
+        cli._report_bad_configuration(self._error("sync_start_date", "not-a-date"))
+        assert "not-a-date" in capsys.readouterr().err
+
+    def test_two_settings_on_one_line_are_diagnosed(self, capsys):
+        """Appending to a file with no trailing newline is the usual cause."""
+        cli._report_bad_configuration(self._error("sync_start_date", "2026-01-01OCR_ENABLED=true"))
+        assert "ran together on one line" in capsys.readouterr().err
+
+    def test_an_ordinary_bad_value_is_not_blamed_on_a_newline(self, capsys):
+        cli._report_bad_configuration(self._error("sync_start_date", "yesterday"))
+        assert "ran together" not in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "value,glued",
+        [
+            ("2026-01-01OCR_ENABLED=true", True),
+            ("./data/attachmentsBACKUP_ENABLED=false", True),
+            ("plain value", False),
+            ("a=b", False),
+            ("", False),
+        ],
+    )
+    def test_the_glue_detector(self, value, glued):
+        assert cli._looks_glued(value) is glued
+
+    def test_logging_survives_a_configuration_it_cannot_read(self, monkeypatch):
+        """get_logger runs at import time, before any command can report."""
+        from app.core import logging as logging_module
+
+        monkeypatch.setattr(logging_module, "_configured", False)
+        monkeypatch.setattr(
+            logging_module,
+            "get_settings",
+            lambda: (_ for _ in ()).throw(RuntimeError("broken .env")),
+        )
+        logging_module.configure_logging()  # must not raise
+        assert logging_module.get_logger("probe") is not None

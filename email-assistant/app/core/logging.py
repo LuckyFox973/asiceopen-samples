@@ -21,8 +21,17 @@ def configure_logging() -> None:
     if _configured:
         return
 
-    settings = get_settings()
-    level = getattr(logging, settings.log_level, logging.INFO)
+    # Modules call get_logger() at import time, so this runs before any
+    # command does.  A broken .env must not turn that into a traceback from
+    # inside an import chain — the command itself reports the problem, in
+    # words, once it is actually running.
+    try:
+        settings = get_settings()
+        level = getattr(logging, settings.log_level, logging.INFO)
+        production = settings.is_production
+    except Exception:  # noqa: BLE001 - reporting is the command's job, not logging's
+        level = logging.INFO
+        production = False
 
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level)
 
@@ -34,7 +43,7 @@ def configure_logging() -> None:
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
     ]
-    if settings.is_production:
+    if production:
         # Cloud Logging expects the level under "severity".
         processors.append(_rename_level_to_severity)
         processors.append(structlog.processors.JSONRenderer())

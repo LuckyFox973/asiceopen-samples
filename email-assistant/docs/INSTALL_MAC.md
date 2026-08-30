@@ -167,8 +167,11 @@ Then read the queue. This is slow — seconds per page — so leave it running:
 ./.venv/bin/python -m app.cli ocr
 ```
 
-To have it happen by itself, put `OCR_ENABLED=true` in `.env`; the background
-daemon then reads a few scans per cycle.
+To have it happen by itself, add `OCR_ENABLED=true` to `.env`. Open the file
+in an editor rather than appending from the shell — `>>` onto a file whose
+last line has no newline glues the two settings together, and the next
+command then refuses to start. If it happens, `python -m app.cli check` names
+the line.
 
 Then look at what it has:
 
@@ -209,6 +212,7 @@ window and it stops — the trade-off of running on your own Mac.
 | `insufficient authentication scopes` | You enabled writes after authorising. Run `auth-url` again. |
 | `Missing code verifier` | An older checkout. Update (below), then start over from `auth-url`. |
 | Migrations fail | `./.venv/bin/alembic upgrade head` to see the real error. |
+| `a setting in .env is not valid` | The named line is malformed — often two settings run together. |
 
 ## Updating
 
