@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import socket
+import sys
 from datetime import date
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -370,3 +373,71 @@ class TestBrokenConfiguration:
         )
         logging_module.configure_logging()  # must not raise
         assert logging_module.get_logger("probe") is not None
+
+
+class TestDesktopRegistration:
+    """Writing the Claude desktop config, over whatever is already there."""
+
+    @staticmethod
+    def _register(path):
+        return cli.cmd_register_desktop(
+            cli.build_parser().parse_args(["register-desktop", "--config", str(path)])
+        )
+
+    def test_a_missing_file_is_created(self, tmp_path):
+        config = tmp_path / "nested" / "claude_desktop_config.json"
+        assert self._register(config) == 0
+        assert json.loads(config.read_text())["mcpServers"]["email-assistant"]
+
+    def test_an_existing_server_is_kept(self, tmp_path):
+        """Overwriting someone's other connectors would be unforgivable."""
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"mcpServers": {"filesystem": {"command": "npx"}}}))
+
+        assert self._register(config) == 0
+        servers = json.loads(config.read_text())["mcpServers"]
+        assert set(servers) == {"filesystem", "email-assistant"}
+
+    def test_unrelated_settings_are_kept(self, tmp_path):
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"theme": "dark"}))
+
+        assert self._register(config) == 0
+        assert json.loads(config.read_text())["theme"] == "dark"
+
+    def test_the_previous_file_is_backed_up(self, tmp_path):
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"theme": "dark"}))
+
+        self._register(config)
+        backup = config.with_name(config.name + ".backup")
+        assert json.loads(backup.read_text()) == {"theme": "dark"}
+
+    def test_running_twice_does_not_duplicate(self, tmp_path):
+        config = tmp_path / "config.json"
+        self._register(config)
+        self._register(config)
+        assert len(json.loads(config.read_text())["mcpServers"]) == 1
+
+    def test_broken_json_is_refused_rather_than_overwritten(self, tmp_path, capsys):
+        """Someone hand-edited it and slipped; their content is not ours to bin."""
+        config = tmp_path / "config.json"
+        config.write_text("{ not json at all")
+
+        assert self._register(config) == 1
+        assert config.read_text() == "{ not json at all"
+        assert "not valid JSON" in capsys.readouterr().err
+
+    def test_the_interpreter_written_is_the_one_running(self, tmp_path):
+        """A virtualenv python is a symlink; resolving it loses the virtualenv
+        and hands the app an interpreter without this project's packages."""
+        config = tmp_path / "config.json"
+        self._register(config)
+        written = json.loads(config.read_text())["mcpServers"]["email-assistant"]["command"]
+        assert written == str(Path(sys.executable).absolute())
+
+    def test_the_command_path_is_absolute(self, tmp_path):
+        config = tmp_path / "config.json"
+        self._register(config)
+        written = json.loads(config.read_text())["mcpServers"]["email-assistant"]["command"]
+        assert Path(written).is_absolute()

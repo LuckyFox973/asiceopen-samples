@@ -97,28 +97,24 @@ environment.)
 Local MCP servers work in the desktop app through its own config file — no
 extension packaging, no particular plan.
 
-Claude menu (the macOS menu bar, not the window) → Settings → Developer →
-**Edit Config**. That opens, creating it if needed:
+One command, run with the project's own interpreter:
 
-    ~/Library/Application Support/Claude/claude_desktop_config.json
-
-Put this in it, replacing `majkl` with your own user name:
-
-```json
-{
-  "mcpServers": {
-    "email-assistant": {
-      "command": "/Users/majkl/email-assistant/email-assistant/.venv/bin/python",
-      "args": ["-m", "app.mcp.server"]
-    }
-  }
-}
+```bash
+cd ~/email-assistant/email-assistant
+./.venv/bin/python -m app.cli register-desktop
 ```
 
-Both paths must be **absolute**. The app launches the server from a directory
-of its own choosing, so a relative path finds nothing — and for the same
-reason settings are read from the project root rather than the working
-directory, which is what makes this two lines instead of an environment block.
+It writes `~/Library/Application Support/Claude/claude_desktop_config.json`,
+keeping any connectors already in it and saving the previous file alongside.
+If that file has been hand-edited into invalid JSON it says so and changes
+nothing.
+
+The interpreter recorded is the one that ran the command — deliberately not
+resolved through its symlink, since a virtualenv's `python` points at the
+system one and following it would hand the app an interpreter with none of
+this project's packages. The path has to be absolute because the app starts
+the server from a directory of its own choosing; for the same reason settings
+are read from the project root rather than the working directory.
 
 Quit Claude completely (⌘Q — closing the window is not enough) and reopen it.
 The tools appear under the **＋** button beside the message box → Connectors.

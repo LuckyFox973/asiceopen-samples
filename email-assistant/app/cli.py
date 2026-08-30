@@ -21,6 +21,7 @@ import sys
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 from pydantic import ValidationError
@@ -768,6 +769,60 @@ def _report_ocr_tools(tools, settings: Settings) -> int:
     return 0
 
 
+DESKTOP_CONFIG = Path("Library/Application Support/Claude/claude_desktop_config.json")
+
+
+def cmd_register_desktop(args: argparse.Namespace) -> int:
+    """Add this project's MCP server to the Claude desktop app's config.
+
+    Written rather than documented because the alternative is pasting JSON
+    into a file the app opens for you — and the first thing that happened
+    when that was the instruction is that it went into a shell instead.
+    """
+    import json
+
+    config_path = Path(args.config).expanduser() if args.config else Path.home() / DESKTOP_CONFIG
+    # Not .resolve(): a virtualenv's python is a symlink to the system one,
+    # and following it hands the desktop app an interpreter that has none of
+    # this project's dependencies.
+    python = Path(sys.executable).absolute()
+
+    config: dict = {}
+    if config_path.exists() and config_path.read_text().strip():
+        try:
+            config = json.loads(config_path.read_text())
+        except json.JSONDecodeError as exc:
+            print(f"error: {config_path} is not valid JSON — {exc}", file=sys.stderr)
+            print("Fix or delete that file, then run this again.", file=sys.stderr)
+            return 1
+    if not isinstance(config, dict):
+        print(f"error: {config_path} does not hold a JSON object.", file=sys.stderr)
+        return 1
+
+    servers = config.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        print(f"error: mcpServers in {config_path} is not a JSON object.", file=sys.stderr)
+        return 1
+
+    # An absolute interpreter path, because the app starts the server from a
+    # directory of its own and nothing relative resolves from there.
+    servers["email-assistant"] = {"command": str(python), "args": ["-m", "app.mcp.server"]}
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if config_path.exists():
+        backup = config_path.with_name(config_path.name + ".backup")
+        backup.write_text(config_path.read_text())
+        print(f"Previous config saved as {backup.name}")
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+
+    print(f"Registered in {config_path}")
+    print(f"  python : {python}")
+    print(f"  servers: {', '.join(sorted(servers))}")
+    print("\nNow quit Claude completely (Cmd-Q — closing the window is not enough)")
+    print("and open it again. The tools appear under the + button, in Connectors.")
+    return 0
+
+
 def cmd_find(args: argparse.Namespace) -> int:
     """Search inside documents rather than message bodies."""
     from app.services.search import search_documents
@@ -1232,6 +1287,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--check", action="store_true", help="report whether the OCR tools are installed"
     )
     ocr_parser.set_defaults(func=cmd_ocr)
+
+    desktop_parser = sub.add_parser(
+        "register-desktop", help="add this MCP server to the Claude desktop app"
+    )
+    desktop_parser.add_argument(
+        "--config", default="", help="write somewhere other than the app's own config"
+    )
+    desktop_parser.set_defaults(func=cmd_register_desktop)
 
     find_parser = sub.add_parser("find", help="search inside document text")
     find_parser.add_argument("query")
