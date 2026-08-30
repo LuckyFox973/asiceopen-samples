@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 
 import pytest
 
@@ -116,3 +117,29 @@ class TestStartupChecks:
             _env_file=None,
         )
         assert verify_configuration(settings) == []
+
+
+class TestSettingsFindTheirFile:
+    """The MCP server is launched by the Claude desktop app, from a directory
+    of the app's choosing — settings cannot depend on the working directory."""
+
+    def test_the_project_root_is_where_the_env_file_lives(self):
+        from app.core.config import PROJECT_ROOT
+
+        assert (PROJECT_ROOT / "pyproject.toml").is_file()
+
+    def test_the_env_file_is_looked_for_by_absolute_path(self):
+        """A bare ".env" resolves against the working directory, and does not."""
+        from app.core.config import PROJECT_ROOT, Settings
+
+        configured = Settings.model_config["env_file"]
+        assert any(
+            isinstance(candidate, Path) and candidate == PROJECT_ROOT / ".env"
+            for candidate in configured
+        )
+
+    def test_settings_load_from_an_unrelated_directory(self, tmp_path, monkeypatch):
+        from app.core.config import Settings
+
+        monkeypatch.chdir(tmp_path)
+        assert Settings().app_env is not None

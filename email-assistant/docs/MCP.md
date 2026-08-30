@@ -94,9 +94,38 @@ environment.)
 
 ## Claude Desktop
 
-Local MCP servers in Claude Desktop ship as **desktop extensions**, which
-Anthropic documents as available on **Team and Enterprise plans**. On Pro or
-Max, use Claude Code (above) or the remote route (below).
+Local MCP servers work in the desktop app through its own config file — no
+extension packaging, no particular plan.
+
+Claude menu (the macOS menu bar, not the window) → Settings → Developer →
+**Edit Config**. That opens, creating it if needed:
+
+    ~/Library/Application Support/Claude/claude_desktop_config.json
+
+Put this in it, replacing `majkl` with your own user name:
+
+```json
+{
+  "mcpServers": {
+    "email-assistant": {
+      "command": "/Users/majkl/email-assistant/email-assistant/.venv/bin/python",
+      "args": ["-m", "app.mcp.server"]
+    }
+  }
+}
+```
+
+Both paths must be **absolute**. The app launches the server from a directory
+of its own choosing, so a relative path finds nothing — and for the same
+reason settings are read from the project root rather than the working
+directory, which is what makes this two lines instead of an environment block.
+
+Quit Claude completely (⌘Q — closing the window is not enough) and reopen it.
+The tools appear under the **＋** button beside the message box → Connectors.
+
+If it does not appear, the app writes the server's own output to
+`~/Library/Logs/Claude/mcp-server-email-assistant.log`; `mcp.log` beside it
+records connection failures.
 
 ## iPhone, and Claude Desktop on any plan — remote connector
 

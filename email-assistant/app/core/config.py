@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
@@ -48,9 +49,19 @@ GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 GMAIL_FULL_SCOPE = "https://mail.google.com/"
 
 
+# app/core/config.py -> app/core -> app -> the project root, which is where
+# .env lives beside pyproject.toml.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Both, in this order: the working directory first so a deployment can
+        # override, then the project's own file.  A relative ".env" alone
+        # means the settings depend on where the process happened to be
+        # started — fine from a shell, useless when the Claude desktop app
+        # launches the MCP server from a directory of its choosing.
+        env_file=(PROJECT_ROOT / ".env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
