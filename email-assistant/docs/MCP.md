@@ -9,14 +9,16 @@ this system is useful, it is the whole answer.
 
 ## What Claude can do through it
 
-Fourteen read-only tools:
+Twenty-four tools, in three groups by what they cost you if they are wrong.
+
+**Reading — sixteen tools, no consequences:**
 
 | | |
 |---|---|
 | `search_emails` | words in subject or body, with filters |
 | `get_thread` | a whole conversation in order |
 | `search_threads` | find conversations rather than messages |
-| `search_documents` | **inside** attachment text — PDF, Word, Excel |
+| `search_documents` | **inside** attachment text — PDF, Word, Excel, archives, scans |
 | `get_attachment_text` | one document, with its tracked changes and comments |
 | `document_versions` | every version of a document, and what changed |
 | `diff_documents` | compare any two documents |
@@ -27,11 +29,36 @@ Fourteen read-only tools:
 | `sync_status` | what is stored, and when it last synced |
 | `run_sync` | fetch new mail now |
 | `recent_actions` | the audit log |
+| `pending_actions` | what is waiting for your decision |
+| `approve_action` / `reject_action` | your decision on one of them |
 
-**Nothing sends, deletes or modifies mail.** The surface matches the read-only
-Gmail scopes, and a test asserts no tool name contains send, delete, trash,
-archive, reply or draft. Actions that change a mailbox arrive with the approval
-workflow, not before.
+**Changing the mailbox, without asking — five tools, all reversible:**
+
+| | |
+|---|---|
+| `apply_label` | put a thread under a label |
+| `archive_message` / `unarchive_message` | out of the inbox, and back |
+| `draft_reply` | write a draft — it is never sent |
+| `restore_message` | back out of the bin |
+
+Labels cannot touch `INBOX`, `TRASH`, `SPAM` or the other system labels:
+`modify` with `addLabelIds: ["TRASH"]` would otherwise be an unaudited bin
+button wearing a label's name.
+
+**Requiring your approval — two tools, and they only ever queue:**
+
+| | |
+|---|---|
+| `request_trash` | asks to move to the bin |
+| `request_permanent_delete` | asks to delete beyond recovery |
+
+Neither does anything by itself. Both write a `pending_action` and stop; the
+mailbox changes when you approve it, and the audit log records who asked, when,
+and what happened.
+
+**There is no tool that sends mail.** The action type exists in the approval
+tiers, and nothing creates one — deliberately, until the system has been lived
+with. Every call, read or write, is written to the audit log.
 
 ## Claude Code on your Mac — the simplest path
 
@@ -50,8 +77,20 @@ Then in Claude Code, `/mcp` shows it connected, and you can ask things like:
 >
 > Which conversations have been waiting on me for more than a week?
 
-The server reads `.env` from the project directory, so run `claude` from there,
-or set `DATABASE_URL` in the MCP entry's environment.
+Testing happens **in the terminal**, not in the Claude desktop app: this
+registers the server with Claude Code, so start it with
+
+```bash
+cd ~/email-assistant/email-assistant
+claude
+```
+
+and type `/mcp` to see it connected.
+
+Run `claude` **from the project directory**. The server reads `.env` from the
+working directory for the database connection, and from anywhere else it will
+not connect. (Alternatively, set `DATABASE_URL` in the MCP entry's own
+environment.)
 
 ## Claude Desktop
 
