@@ -839,8 +839,14 @@ def cmd_config(args: argparse.Namespace) -> int:
             return 0
         print(f"{env_path}\n")
         for setting in settings:
-            print(f"  {setting.name:<32} {setting.display()}")
+            repeat = "   (set more than once)" if setting.duplicated else ""
+            print(f"  {setting.name:<32} {setting.display()}{repeat}")
         print("\nValues that look like credentials are not printed.")
+        if any(s.duplicated for s in settings):
+            print(
+                "A name set more than once takes its last value. "
+                "`config set` fixes that by removing the dead lines."
+            )
         return 0
 
     if not args.name:

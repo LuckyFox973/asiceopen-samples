@@ -113,3 +113,60 @@ class TestWriting:
     def test_the_name_is_upper_cased(self, env):
         set_value(env, "drive_write_enabled", "true")
         assert "DRIVE_WRITE_ENABLED=true" in env.read_text()
+
+
+class TestParsingMatchesTheApplication:
+    """Values are read with the same parser the application loads them with;
+    splitting on the first "=" reports things the program does not have."""
+
+    def test_a_trailing_comment_is_not_part_of_the_value(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text("APP_ENV=development   # development | staging | production\n")
+        assert get(path, "APP_ENV").value == "development"
+
+    def test_a_hash_inside_a_value_is_kept(self, tmp_path):
+        """`pass#word` is a password, not a comment."""
+        path = tmp_path / ".env"
+        path.write_text("SECRETISH=pass#word\n")
+        assert get(path, "SECRETISH").value == "pass#word"
+
+    def test_a_quoted_value_keeps_its_hashes(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text('NAME="value # kept"\n')
+        assert get(path, "NAME").value == "value # kept"
+
+
+class TestDuplicates:
+    """dotenv takes the last assignment; earlier ones are dead lines."""
+
+    @pytest.fixture
+    def repeated(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text("GMAIL_WRITE_ENABLED=false\nOTHER=1\nGMAIL_WRITE_ENABLED=true\n")
+        return path
+
+    def test_the_effective_value_is_the_last_one(self, repeated):
+        assert get(repeated, "GMAIL_WRITE_ENABLED").value == "true"
+
+    def test_a_repeat_is_reported_once_and_flagged(self, repeated):
+        settings = {s.name: s for s in read(repeated)}
+        assert settings["GMAIL_WRITE_ENABLED"].duplicated is True
+        assert settings["OTHER"].duplicated is False
+
+    def test_setting_it_changes_the_one_in_force(self, repeated):
+        """Editing the first would leave the later line still overriding it,
+        and the command would appear to have done nothing."""
+        set_value(repeated, "GMAIL_WRITE_ENABLED", "false")
+        assert get(repeated, "GMAIL_WRITE_ENABLED").value == "false"
+
+    def test_the_dead_repeats_are_removed(self, repeated):
+        set_value(repeated, "GMAIL_WRITE_ENABLED", "false")
+        assert repeated.read_text().count("GMAIL_WRITE_ENABLED") == 1
+
+    def test_the_previous_value_reported_is_the_one_that_was_in_force(self, repeated):
+        _created, previous = set_value(repeated, "GMAIL_WRITE_ENABLED", "false")
+        assert previous == "true"
+
+    def test_other_settings_survive_the_tidy_up(self, repeated):
+        set_value(repeated, "GMAIL_WRITE_ENABLED", "false")
+        assert get(repeated, "OTHER").value == "1"
