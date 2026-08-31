@@ -167,11 +167,30 @@ Then read the queue. This is slow — seconds per page — so leave it running:
 ./.venv/bin/python -m app.cli ocr
 ```
 
-To have it happen by itself, add `OCR_ENABLED=true` to `.env`. Open the file
-in an editor rather than appending from the shell — `>>` onto a file whose
-last line has no newline glues the two settings together, and the next
-command then refuses to start. If it happens, `python -m app.cli check` names
-the line.
+To have it happen by itself:
+
+```bash
+./.venv/bin/python -m app.cli config set OCR_ENABLED true
+```
+
+## Changing settings
+
+`.env` is a hidden file, and appending to it from the shell is how it gets
+broken: `>>` onto a file whose last line has no newline glues two settings
+into one, and every command then refuses to start. So settings are changed by
+a command that puts the newline in, and checks the file still loads before
+leaving it changed:
+
+```bash
+./.venv/bin/python -m app.cli config list         # what is set
+./.venv/bin/python -m app.cli config get OCR_ENABLED
+./.venv/bin/python -m app.cli config set OCR_ENABLED true
+```
+
+`config list` never prints anything that looks like a credential — terminal
+output gets pasted into chats and issue reports.
+
+To edit by hand anyway: `open -e .env` opens it in TextEdit.
 
 Then look at what it has:
 

@@ -823,6 +823,82 @@ def cmd_register_desktop(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config(args: argparse.Namespace) -> int:
+    """Read and change settings in .env, safely."""
+    from app.core.config import PROJECT_ROOT, Settings
+    from app.services.envfile import get as env_get
+    from app.services.envfile import read as env_read
+    from app.services.envfile import set_value
+
+    env_path = Path(args.env).expanduser() if args.env else PROJECT_ROOT / ".env"
+
+    if args.action == "list":
+        settings = env_read(env_path)
+        if not settings:
+            print(f"{env_path} holds no settings.")
+            return 0
+        print(f"{env_path}\n")
+        for setting in settings:
+            print(f"  {setting.name:<32} {setting.display()}")
+        print("\nValues that look like credentials are not printed.")
+        return 0
+
+    if not args.name:
+        print("usage: config get NAME | config set NAME VALUE | config list", file=sys.stderr)
+        return 1
+
+    if args.action == "get":
+        setting = env_get(env_path, args.name)
+        if setting is None:
+            print(f"{args.name.upper()} is not set in {env_path.name}.")
+            return 1
+        print(f"{setting.name} = {setting.display()}")
+        return 0
+
+    if args.value is None:
+        print("usage: config set NAME VALUE", file=sys.stderr)
+        return 1
+
+    before = env_path.read_text() if env_path.exists() else None
+    created, previous = set_value(env_path, args.name, args.value)
+
+    # Prove the file still loads before leaving it changed: a value that
+    # cannot be parsed would otherwise stop every command, including this one.
+    try:
+        Settings(_env_file=env_path)
+    except Exception as exc:  # noqa: BLE001 - reported, then reverted
+        if before is not None:
+            env_path.write_text(before)
+        print(f"error: {args.name.upper()}={args.value!r} is not a valid setting.", file=sys.stderr)
+        print(f"\n  {_why_invalid(exc)}", file=sys.stderr)
+        print("\nNothing was changed.", file=sys.stderr)
+        return 1
+
+    name = args.name.upper()
+    if created:
+        print(f"Added {name}={args.value}")
+    elif previous == args.value:
+        print(f"{name} was already {args.value}")
+    else:
+        shown = "(hidden)" if env_get(env_path, name).secret else repr(previous)
+        print(f"Changed {name}: {shown} -> {args.value}")
+    print(f"\nin {env_path}")
+    return 0
+
+
+def _why_invalid(exc: Exception) -> str:
+    """The sentence pydantic buried under its own header.
+
+    Its first line is "1 validation error for Settings", which tells the
+    reader nothing they did not already know.
+    """
+    if isinstance(exc, ValidationError):
+        problems = exc.errors()
+        if problems:
+            return problems[0].get("msg", str(exc))
+    return _first_line(exc)
+
+
 def cmd_folder(args: argparse.Namespace) -> int:
     """Manage the Drive folders that documents are filed into."""
     from app.services.filing import list_folders, register_folder
@@ -1452,6 +1528,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default="", help="write somewhere other than the app's own config"
     )
     desktop_parser.set_defaults(func=cmd_register_desktop)
+
+    config_parser = sub.add_parser("config", help="read and change settings in .env")
+    config_parser.add_argument("action", choices=["get", "set", "list"])
+    config_parser.add_argument("name", nargs="?", default="")
+    config_parser.add_argument("value", nargs="?", default=None)
+    config_parser.add_argument("--env", default="", help="a different .env to work on")
+    config_parser.set_defaults(func=cmd_config)
 
     folder_parser = sub.add_parser("folder", help="Drive folders documents are filed into")
     folder_parser.add_argument("action", choices=["add", "list"])
