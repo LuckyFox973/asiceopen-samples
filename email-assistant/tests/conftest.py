@@ -120,3 +120,14 @@ def account(db_session: Session):
     db_session.flush()
     db_session.refresh(acc)
     return acc
+
+
+@pytest.fixture
+def settings_factory():
+    """Settings built from defaults, not from whatever .env happens to say."""
+    from app.core.config import Settings
+
+    def build(**overrides) -> Settings:
+        return Settings(_env_file=None, **overrides)
+
+    return build

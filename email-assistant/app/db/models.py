@@ -708,6 +708,7 @@ class ActionType(enum.StrEnum):
     UNTRASH = "untrash"
     DELETE_PERMANENT = "delete_permanent"
     SEND = "send"
+    DRIVE_UPLOAD = "drive_upload"
 
 
 class ActionStatus(enum.StrEnum):
@@ -723,6 +724,34 @@ class RiskTier(enum.StrEnum):
     AUTOMATIC = "automatic"  # safe, reversible, done without asking
     CONFIGURABLE = "configurable"  # automatic only if you switched it on
     APPROVAL = "approval"  # never without an explicit yes
+
+
+class FilingFolder(Base, TimestampMixin):
+    """A Drive folder that documents for one of my own companies go into.
+
+    Filing is by the entity that was *billed*, not by who sent the invoice:
+    Anthropic invoicing INFI files under INFI.  So the terms matched against
+    are the recipient company's — its name as it is written on an invoice,
+    and its registration numbers, which are the part that never varies.
+    """
+
+    __tablename__ = "filing_folder"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_filing_folder_name"),
+        Index("ix_filing_folder_active", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    drive_folder_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    # What to look for in a document's text.  Stored as given; matching folds
+    # case and accents, so "Infinity Finance" finds "INFINITY FINANCE s.r.o."
+    match_terms: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    note: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<FilingFolder {self.name}>"
 
 
 class PendingAction(Base):

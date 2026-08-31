@@ -36,6 +36,10 @@ GMAIL_SCOPES_READONLY: tuple[str, ...] = (GMAIL_READONLY_SCOPE, *GMAIL_SCOPES_CO
 # Added only when Drive backups are enabled.  Grants access to files this
 # application creates and to nothing else in the user's Drive.
 DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+# Restricted.  Needed only to write into folders the user already owns:
+# drive.file reaches nothing the application did not itself create, so a
+# pre-existing folder is invisible to it and an upload there fails 404.
+DRIVE_FULL_SCOPE = "https://www.googleapis.com/auth/drive"
 
 # Labels, archive, trash/untrash, drafts, send.  Everything the assistant needs
 # to act on a mailbox — except bypassing the trash.
@@ -147,6 +151,17 @@ class Settings(BaseSettings):
     ocr_timeout_seconds: int = Field(default=120, ge=5, le=3600)
     ocr_batch_size: int = Field(default=10, ge=1, le=500)
 
+    # --- Filing documents into Google Drive --------------------------------
+    # Off by default, and deliberately hard to turn on by accident: it asks
+    # for write access to the whole of the user's Drive, which is far wider
+    # than anything else here.  Google treats it as a restricted scope; on a
+    # Workspace account an Internal OAuth app may use it without review.
+    drive_write_enabled: bool = False
+    # Whether a resolved filing may run the moment it is proposed.  False
+    # means it waits — which is the point: an invoice is filed after it has
+    # been paid or booked, and only its recipient knows when that was.
+    drive_auto_file: bool = False
+
     # --- Internal job auth -------------------------------------------------
     job_auth_token: str = ""
 
@@ -179,9 +194,11 @@ class Settings(BaseSettings):
     def gmail_scopes(self) -> list[str]:
         """Scopes requested at consent.
 
-        The Drive scope is added only when Drive backups are configured, and
-        it is ``drive.file`` — access limited to files this application itself
-        creates, never the rest of the Drive.
+        Drive is asked for only when something needs it, and at the narrowest
+        level that works.  ``drive.file`` covers backups, because those are
+        files this application creates.  Filing a document into a folder the
+        user already made needs the full scope: ``drive.file`` cannot see a
+        folder it did not create, so naming it as a parent fails.
         """
         # Only the narrowest scope that covers what is enabled: gmail.modify
         # already grants read, and mail.google.com already grants both, so
@@ -195,7 +212,12 @@ class Settings(BaseSettings):
             mail_scope = GMAIL_READONLY_SCOPE
 
         scopes = [mail_scope, *GMAIL_SCOPES_COMMON]
-        if self.backup_enabled and self.backup_backend == "gdrive":
+        # As with mail: one Drive scope, the narrowest that covers what is on.
+        # The full scope supersedes drive.file, so asking for both would have
+        # the consent screen overstate what the application can use.
+        if self.drive_write_enabled:
+            scopes.append(DRIVE_FULL_SCOPE)
+        elif self.backup_enabled and self.backup_backend == "gdrive":
             scopes.append(DRIVE_FILE_SCOPE)
         return scopes
 

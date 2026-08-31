@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import date
 
 import pytest
@@ -333,3 +334,34 @@ class TestStateTools:
     def test_review_queue_is_empty_when_nothing_is_uncertain(self, populated):
         output = call("review_queue")
         assert "Nothing waiting" in output or "confidence" in output
+
+
+class TestFilingTools:
+    """Filing writes outside the mailbox, so its tools are held to more."""
+
+    @staticmethod
+    def _tools() -> dict[str, str]:
+        return {t.name: (t.description or "") for t in asyncio.run(mcp_module.server.list_tools())}
+
+    def test_the_filing_tools_are_present(self):
+        assert {"filing_folders", "which_folder", "file_to_drive"} <= set(self._tools())
+
+    def test_the_filing_tool_tells_the_model_not_to_act_on_its_own(self):
+        """An invoice is filed once paid or booked, and only its owner knows."""
+        described = self._tools()["file_to_drive"].lower()
+        assert "must ask for this explicitly" in described
+        assert "own initiative" in described
+
+    def test_the_dry_run_tool_says_it_files_nothing(self):
+        assert "without filing" in self._tools()["which_folder"].lower()
+
+    def test_it_refuses_when_drive_writing_is_off(self, monkeypatch, db_session):
+        """The permission is wider than anything else here; never implicit."""
+        from app.core.config import Settings
+
+        monkeypatch.setattr(
+            mcp_module, "get_settings", lambda: Settings(_env_file=None, drive_write_enabled=False)
+        )
+        answer = mcp_module.file_to_drive(str(uuid.uuid4()))
+        assert "switched off" in answer
+        assert "DRIVE_WRITE_ENABLED" in answer

@@ -7,6 +7,7 @@ is, but **how bad it is if the assistant is wrong.**
 |---|---|---|
 | **automatic** | apply a managed label, write a draft, unarchive, restore from bin | immediately |
 | **configurable** | archive, remove a label | immediately once `GMAIL_AUTO_ARCHIVE=true`, otherwise it asks |
+| **configurable** | file a document to Drive | immediately once `DRIVE_AUTO_FILE=true`, otherwise it asks |
 | **approval** | move to bin, permanent delete, send | never without an explicit yes |
 
 **No setting promotes an action out of the approval tier.** There is
@@ -90,3 +91,70 @@ python -m app.cli action draft --to klient@abc.sk \
   approval tier, but no MCP tool creates one. Sending on your behalf is a
   bigger step than binning, and it will ship when you ask for it, not as a side
   effect of enabling writes.
+
+
+## Filing a document to Drive
+
+An invoice is filed under the company that was **billed**, not under whoever
+sent it: Anthropic invoicing INFI belongs in INFI's folder. The document's own
+text is searched for the billed company's name and registration number, and
+the number is what carries the weight — a name can be a substring of another
+company's name, while a registration number is a fact about exactly one.
+
+Nothing is guessed. When two of the owner's own companies are both named, or
+only a weak match exists, it files nothing and says why: a misfiled invoice is
+worse than one that waits for an answer.
+
+**The order is deliberate.** The document is uploaded first and the mail
+archived second, so it is safely somewhere else before it leaves the inbox. A
+failed upload archives nothing, and the mail is still where its owner expects
+to find it.
+
+Each configurable action is released by **its own** setting. One shared flag
+was enough while archiving was the only one; letting a Drive upload run
+because archiving had been allowed would be a different permission than the
+owner granted.
+
+### The permission this needs
+
+Writing into a folder the owner already made requires the full `drive` scope.
+`drive.file` — which is what backups use, and all this asked for until now —
+reaches only files the application itself created, so a pre-existing folder is
+invisible to it and naming it as a parent fails.
+
+Google treats the full scope as restricted. On a Workspace domain an
+**Internal** OAuth app may use it without review; on a personal account the
+app stays in testing, where refresh tokens expire after seven days.
+
+It is off by default, and turning it on is two steps rather than one:
+`DRIVE_WRITE_ENABLED=true` and a fresh consent. The MCP tool refuses with an
+explanation rather than failing obscurely when it is off.
+
+### From the command line
+
+```bash
+# Register a company's folder, once
+python -m app.cli folder add 03_INFI <drive-folder-id> \
+    --match "Infinity Finance" --match 51234567
+
+python -m app.cli folder list
+
+# See what would happen
+python -m app.cli file-to-drive <attachment-id> --dry-run
+
+# Do it
+python -m app.cli file-to-drive <attachment-id>
+python -m app.cli file-to-drive <attachment-id> --no-archive
+python -m app.cli file-to-drive <attachment-id> --folder 03_INFI
+```
+
+A folder registered with no match terms is refused: it could never resolve,
+and a registry entry that silently never fires is worse than none.
+
+### From Claude
+
+`filing_folders` lists them, `which_folder` says where a document belongs
+without touching anything, and `file_to_drive` does it. The last one's
+description tells the model plainly that the user must ask for it — filing
+happens once an invoice is paid or booked, and only its recipient knows when
+that was.

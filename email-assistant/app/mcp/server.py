@@ -802,6 +802,134 @@ def unarchive_message(gmail_message_id: str) -> str:
 
 @server.tool(
     description=(
+        "List the Drive folders that documents are filed into, one per company "
+        "of the user's own, with the terms that identify each. Filing is by the "
+        "company that was BILLED, not by who sent the invoice."
+    )
+)
+@readable_errors
+def filing_folders() -> str:
+    """Where documents can be filed, and how each folder is recognised."""
+    from app.services.filing import list_folders
+
+    with session_scope() as session:
+        folders = list_folders(session)
+        if not folders:
+            return (
+                "No filing folders are registered, so nothing can be filed yet. "
+                "They are added from the command line: "
+                "python -m app.cli folder add <name> <drive-folder-id> --match <term>"
+            )
+        return "\n".join(
+            f"{f.name}\n  drive folder: {f.drive_folder_id}\n"
+            f"  identified by: {', '.join(f.match_terms)}"
+            for f in folders
+        )
+
+
+@server.tool(
+    description=(
+        "Work out which company an attachment was billed to, WITHOUT filing it. "
+        "Use this before file_to_drive to show the user what would happen. "
+        "Returns the folder and what matched, or says why it cannot tell."
+    )
+)
+@readable_errors
+def which_folder(attachment_id: str) -> str:
+    """Which folder a document belongs in, and on what evidence."""
+    from app.db.models import Attachment
+    from app.services.filing import document_text_for, resolve
+
+    with session_scope() as session:
+        attachment = session.get(Attachment, _parse_uuid(attachment_id, "attachment_id"))
+        if attachment is None:
+            return f"No attachment {attachment_id}."
+
+        outcome = resolve(session, document_text_for(session, attachment))
+        if outcome.resolved:
+            best = outcome.suggestion
+            return (
+                f"{attachment.filename} belongs in {best.folder.name} "
+                f"({best.confidence:.0%} — matched {', '.join(best.matched)})."
+            )
+        lines = [f"Cannot tell where {attachment.filename} belongs: {outcome.reason}"]
+        lines += [
+            f"  {c.folder.name} ({c.confidence:.0%}, matched {', '.join(c.matched)})"
+            for c in outcome.candidates
+        ]
+        lines.append("The user can choose one, and file_to_drive takes a folder name.")
+        return "\n".join(lines)
+
+
+@server.tool(
+    description=(
+        "File an attachment into its company's Drive folder and then archive the "
+        "message that carried it. THE USER MUST ASK FOR THIS EXPLICITLY — an "
+        "invoice is filed once it has been paid or booked, and only they know "
+        "when that is. Never call it to tidy up on your own initiative. If the "
+        "company cannot be told from the document, it files nothing; pass "
+        "folder= to choose. Nothing is archived unless the upload succeeded."
+    )
+)
+@readable_errors
+def file_to_drive(attachment_id: str, folder: str = "", archive: bool = True) -> str:
+    """Upload one document to Drive, then archive its message."""
+    from app.db.models import Attachment, MailboxAccount
+    from app.gmail.actions import GmailActions
+    from app.services.drive import DriveClient
+    from app.services.filing import file_attachment, list_folders
+    from app.services.runner import build_client, build_credentials
+    from app.services.storage import build_storage
+
+    settings = get_settings()
+    if not settings.drive_write_enabled:
+        return (
+            "Filing to Drive is switched off. It needs write access to the "
+            "user's Drive, which is wider than any other permission here, so it "
+            "is never on by default. They can set DRIVE_WRITE_ENABLED=true in "
+            ".env and re-authorise."
+        )
+
+    with session_scope() as session:
+        attachment = session.get(Attachment, _parse_uuid(attachment_id, "attachment_id"))
+        if attachment is None:
+            return f"No attachment {attachment_id}."
+
+        chosen = None
+        if folder:
+            chosen = next(
+                (f for f in list_folders(session) if f.name.lower() == folder.lower()), None
+            )
+            if chosen is None:
+                known = ", ".join(f.name for f in list_folders(session)) or "none"
+                return f"No filing folder named {folder!r}. Registered: {known}."
+
+        account = session.get(MailboxAccount, attachment.account_id)
+        result = file_attachment(
+            session,
+            account,
+            attachment,
+            build_storage(settings),
+            DriveClient(build_credentials(session, account, settings)),
+            gmail=GmailActions(build_client(session, account, settings)) if archive else None,
+            folder=chosen,
+            archive_after=archive,
+            requested_by="user",
+            settings=settings,
+        )
+
+        if not result.filed:
+            return f"Nothing was filed and nothing was archived: {result.skipped}"
+        answer = f"Filed {result.filename} into {result.folder.name}."
+        if result.archive is not None:
+            answer += " The message it came from is archived."
+        elif result.skipped:
+            answer += f" {result.skipped}"
+        return answer
+
+
+@server.tool(
+    description=(
         "Propose moving a message to the bin. Never happens on its own — it "
         "returns an id and waits for the user to approve. Gmail keeps binned "
         "mail about 30 days, and restore_message reverses it."

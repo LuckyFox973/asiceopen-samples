@@ -823,6 +823,163 @@ def cmd_register_desktop(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_folder(args: argparse.Namespace) -> int:
+    """Manage the Drive folders that documents are filed into."""
+    from app.services.filing import list_folders, register_folder
+
+    with session_scope() as session:
+        if args.action == "list":
+            folders = list_folders(session, include_inactive=True)
+            if not folders:
+                print("No filing folders yet. Add one:")
+                print("  python -m app.cli folder add 03_INFI <drive-folder-id> \\")
+                print('      --match "Infinity Finance" --match 51234567')
+                return 0
+            for folder in folders:
+                state = "" if folder.is_active else "  [inactive]"
+                print(f"{folder.name}{state}")
+                print(f"    drive folder: {folder.drive_folder_id}")
+                terms = ", ".join(folder.match_terms) or "(nothing — never resolves)"
+                print(f"    matches     : {terms}")
+            return 0
+
+        if not args.name or not args.folder_id:
+            print("usage: folder add <name> <drive-folder-id> --match TERM ...", file=sys.stderr)
+            return 1
+        if not args.match:
+            print(
+                "error: at least one --match term is needed, or nothing will "
+                "ever resolve to this folder.",
+                file=sys.stderr,
+            )
+            print(
+                "\nUse the billed company's own name and registration number — "
+                "the number is what never varies.",
+                file=sys.stderr,
+            )
+            return 1
+
+        folder = register_folder(
+            session, args.name, args.folder_id, list(args.match), note=args.note or None
+        )
+        print(f"{folder.name} -> {folder.drive_folder_id}")
+        print(f"  matches: {', '.join(folder.match_terms)}")
+        return 0
+
+
+def cmd_file_to_drive(args: argparse.Namespace) -> int:
+    """File an attachment into its company's Drive folder, then archive."""
+    from app.services.drive import DriveClient
+    from app.services.filing import (
+        document_text_for,
+        file_attachment,
+        list_folders,
+        resolve,
+    )
+    from app.services.storage import build_storage
+
+    settings = get_settings()
+    if not settings.drive_write_enabled:
+        print("error: DRIVE_WRITE_ENABLED is not set.", file=sys.stderr)
+        print(
+            "\nFiling writes into folders you already own, which needs a wider "
+            "Google permission than anything else here. Set it in .env and "
+            "re-run: python -m app.cli auth-url",
+            file=sys.stderr,
+        )
+        return 1
+
+    with session_scope() as session:
+        attachment = _resolve_attachment(session, args.attachment)
+        text = document_text_for(session, attachment)
+        outcome = resolve(session, text)
+
+        folder = None
+        if args.folder:
+            folder = next(
+                (f for f in list_folders(session) if f.name.lower() == args.folder.lower()), None
+            )
+            if folder is None:
+                print(f"No filing folder named {args.folder!r}.", file=sys.stderr)
+                return 1
+        elif not outcome.resolved:
+            print(f"Cannot tell which company this belongs to: {outcome.reason}", file=sys.stderr)
+            for candidate in outcome.candidates:
+                print(
+                    f"  {candidate.folder.name}  ({candidate.confidence:.0%}, "
+                    f"matched {', '.join(candidate.matched)})",
+                    file=sys.stderr,
+                )
+            print("\nChoose one with --folder NAME.", file=sys.stderr)
+            return 1
+
+        if args.dry_run:
+            chosen = folder or outcome.suggestion.folder
+            print(f"Would file {attachment.filename} into {chosen.name}")
+            if outcome.suggestion:
+                print(f"  matched: {', '.join(outcome.suggestion.matched)}")
+            print(f"  archive after: {'no' if args.no_archive else 'yes'}")
+            return 0
+
+        account = session.get(MailboxAccount, attachment.account_id)
+        from app.gmail.actions import GmailActions
+        from app.services.runner import build_client
+
+        gmail = None
+        if not args.no_archive:
+            gmail = GmailActions(build_client(session, account, settings))
+
+        result = file_attachment(
+            session,
+            account,
+            attachment,
+            build_storage(settings),
+            DriveClient(_drive_credentials(session, account, settings)),
+            gmail=gmail,
+            folder=folder,
+            archive_after=not args.no_archive,
+            requested_by="user",
+            settings=settings,
+        )
+
+    if result.skipped and not result.filed:
+        print(f"Not filed: {result.skipped}", file=sys.stderr)
+        return 1
+    print(f"Filed {result.filename} into {result.folder.name}")
+    if result.archive is not None:
+        print("Archived the message it came from.")
+    elif result.skipped:
+        print(result.skipped)
+    return 0
+
+
+def _resolve_attachment(session, identifier: str):
+    from app.db.models import Attachment
+
+    try:
+        attachment = session.get(Attachment, uuid.UUID(identifier))
+    except ValueError:
+        attachment = session.scalars(
+            select(Attachment).where(Attachment.filename == identifier).limit(2)
+        ).all()
+        if len(attachment) > 1:
+            raise SystemExit(
+                f"{identifier!r} names more than one attachment; use its id "
+                "(python -m app.cli find shows them)."
+            ) from None
+        attachment = attachment[0] if attachment else None
+    if attachment is None:
+        raise SystemExit(f"No attachment matches {identifier!r}.")
+    return attachment
+
+
+def _drive_credentials(session, account, settings):
+    """The same credentials the backup path uses — one refresh, one token."""
+    from app.services.runner import build_credentials
+
+    return build_credentials(session, account, settings)
+
+
 def cmd_find(args: argparse.Namespace) -> int:
     """Search inside documents rather than message bodies."""
     from app.services.search import search_documents
@@ -1295,6 +1452,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default="", help="write somewhere other than the app's own config"
     )
     desktop_parser.set_defaults(func=cmd_register_desktop)
+
+    folder_parser = sub.add_parser("folder", help="Drive folders documents are filed into")
+    folder_parser.add_argument("action", choices=["add", "list"])
+    folder_parser.add_argument("name", nargs="?", default="")
+    folder_parser.add_argument("folder_id", nargs="?", default="")
+    folder_parser.add_argument(
+        "--match", action="append", default=[], help="a term identifying the billed company"
+    )
+    folder_parser.add_argument("--note", default="")
+    folder_parser.set_defaults(func=cmd_folder)
+
+    # Not "file": that subcommand already files threads under matters.
+    drive_parser = sub.add_parser(
+        "file-to-drive", help="file an attachment to Drive, then archive the mail"
+    )
+    drive_parser.add_argument("attachment", help="attachment id, or its filename")
+    drive_parser.add_argument("--folder", default="", help="override which folder it goes in")
+    drive_parser.add_argument(
+        "--no-archive", action="store_true", help="file it but leave the mail in the inbox"
+    )
+    drive_parser.add_argument(
+        "--dry-run", action="store_true", help="say what would happen, change nothing"
+    )
+    drive_parser.set_defaults(func=cmd_file_to_drive)
 
     find_parser = sub.add_parser("find", help="search inside document text")
     find_parser.add_argument("query")

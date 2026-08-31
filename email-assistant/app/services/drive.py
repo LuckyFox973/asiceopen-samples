@@ -1,19 +1,29 @@
-"""Google Drive client for backup archives.
+"""Google Drive client: backup archives, and filing documents.
 
-Uses the ``drive.file`` scope, which grants access **only to files this
-application itself creates**.  Nothing else in the Drive is visible to it —
-an important property when the same Google account holds client documents.
+Backups need only ``drive.file``, which reaches **files this application
+itself created** and nothing else in the Drive — the right default when the
+same Google account holds client documents.
+
+Filing a document into a folder the owner already made is different, and the
+difference is not a matter of taste: ``drive.file`` cannot see such a folder,
+so naming it as a parent fails.  That needs the full ``drive`` scope, which
+the application asks for only when ``DRIVE_WRITE_ENABLED`` is set.
 """
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from googleapiclient.http import (
+    MediaFileUpload,
+    MediaIoBaseDownload,
+    MediaIoBaseUpload,
+)
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.logging import get_logger
@@ -92,6 +102,40 @@ class DriveClient:
             )
             .execute()
         )
+        return _to_drive_file(created)
+
+    @drive_retry
+    def upload_bytes(
+        self,
+        data: bytes,
+        folder_id: str,
+        name: str,
+        mime_type: str | None = None,
+    ) -> DriveFile:
+        """Upload from memory, so filing writes no second copy to disk.
+
+        The bytes are already stored once, content-addressed; staging them in
+        a temporary file to hand to the API would put a client's document in a
+        second place that would then have to be found and deleted on request.
+        """
+        media = MediaIoBaseUpload(
+            io.BytesIO(data),
+            mimetype=mime_type or ARCHIVE_MIME,
+            resumable=len(data) > RESUMABLE_THRESHOLD,
+        )
+        created = (
+            self._service.files()
+            .create(
+                body={"name": name, "parents": [folder_id]},
+                media_body=media,
+                fields="id, name, size, createdTime",
+                # A folder in a Workspace shared drive is not reachable
+                # otherwise, and these companies' folders may well live in one.
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        log.info("drive.filed", name=name, folder=folder_id, bytes=len(data))
         return _to_drive_file(created)
 
     @drive_retry

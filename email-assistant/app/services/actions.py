@@ -19,6 +19,7 @@ quietly.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -38,7 +39,12 @@ from app.db.models import (
     PendingAction,
     RiskTier,
 )
-from app.gmail.actions import GmailActions, UnsafeLabelError, describe_http_error
+from app.gmail.actions import (
+    ActionOutcome,
+    GmailActions,
+    UnsafeLabelError,
+    describe_http_error,
+)
 
 log = get_logger(__name__)
 
@@ -56,6 +62,7 @@ RISK_TIERS: dict[ActionType, RiskTier] = {
     ActionType.UNTRASH: RiskTier.AUTOMATIC,
     ActionType.LABEL_REMOVE: RiskTier.CONFIGURABLE,
     ActionType.ARCHIVE: RiskTier.CONFIGURABLE,
+    ActionType.DRIVE_UPLOAD: RiskTier.CONFIGURABLE,
     ActionType.TRASH: RiskTier.APPROVAL,
     ActionType.SEND: RiskTier.APPROVAL,
     ActionType.DELETE_PERMANENT: RiskTier.APPROVAL,
@@ -68,6 +75,12 @@ class ActionError(RuntimeError):
 
 class ApprovalRequiredError(ActionError):
     """Raised when execution is attempted on an unapproved approval-tier action."""
+
+
+# A Drive filing is carried out by a callable the caller supplies, taking the
+# action's payload and returning the same outcome a Gmail call would.  Keeping
+# it a type rather than an import leaves this module free of the Drive client.
+DriveUpload = Callable[[dict], ActionOutcome]
 
 
 @dataclass(slots=True)
@@ -86,13 +99,27 @@ def risk_tier(action_type: ActionType) -> RiskTier:
     return RISK_TIERS.get(action_type, RiskTier.APPROVAL)
 
 
+# A configurable action is released by its own setting.  One shared flag was
+# fine while archiving was the only one; releasing a Drive upload because
+# archiving had been allowed would be a different permission than the owner
+# granted.
+CONFIGURABLE_SETTING: dict[ActionType, str] = {
+    ActionType.ARCHIVE: "gmail_auto_archive",
+    ActionType.LABEL_REMOVE: "gmail_auto_archive",
+    ActionType.DRIVE_UPLOAD: "drive_auto_file",
+}
+
+
 def runs_without_asking(action_type: ActionType, settings: Settings) -> bool:
     """Whether this action may execute the moment it is proposed."""
     tier = risk_tier(action_type)
     if tier is RiskTier.AUTOMATIC:
         return True
     if tier is RiskTier.CONFIGURABLE:
-        return settings.gmail_auto_archive
+        # An unmapped configurable action waits, rather than inheriting
+        # somebody else's permission by accident.
+        setting = CONFIGURABLE_SETTING.get(action_type)
+        return bool(setting and getattr(settings, setting, False))
     return False
 
 
@@ -110,7 +137,16 @@ def propose(
     """Record an intended action. Does not execute it."""
     settings = settings or get_settings()
 
-    if not settings.gmail_write_enabled:
+    if request.action_type is ActionType.DRIVE_UPLOAD:
+        if not settings.drive_write_enabled:
+            raise ActionError(
+                "Filing to Drive is disabled. It needs write access to Drive, "
+                "which is a wider permission than anything else here — set "
+                "DRIVE_WRITE_ENABLED=true and re-run the consent flow."
+            )
+    elif not settings.gmail_write_enabled:
+        # Only Gmail actions are stopped by the Gmail scope; a Drive upload
+        # touches no mailbox and is not the mailbox's permission to withhold.
         raise ActionError(
             "Gmail write access is disabled. The mailbox was authorised with "
             "read-only scopes, so this cannot be carried out even if approved. "
@@ -221,8 +257,13 @@ def execute(
     action: PendingAction,
     gmail: GmailActions,
     settings: Settings | None = None,
+    upload: DriveUpload | None = None,
 ) -> PendingAction:
-    """Carry out an action that is allowed to be carried out."""
+    """Carry out an action that is allowed to be carried out.
+
+    *upload* is required only for a Drive filing, and is injected rather than
+    built here so this module stays free of the Drive client.
+    """
     settings = settings or get_settings()
     action_type = ActionType(action.action_type)
 
@@ -239,7 +280,12 @@ def execute(
     target = action.gmail_target_id
 
     try:
-        outcome = _dispatch(gmail, action_type, target, payload)
+        if action_type is ActionType.DRIVE_UPLOAD:
+            if upload is None:
+                raise ActionError("No Drive uploader was supplied for a filing action.")
+            outcome = upload(payload)
+        else:
+            outcome = _dispatch(gmail, action_type, target, payload)
     except UnsafeLabelError as exc:
         return _fail(session, action, str(exc))
     except Exception as exc:  # noqa: BLE001 - recorded on the action, then reported
@@ -265,7 +311,11 @@ def execute(
 
 
 def _dispatch(gmail: GmailActions, action_type: ActionType, target: str | None, payload: dict):
-    if not target and action_type not in {ActionType.DRAFT_CREATE, ActionType.SEND}:
+    if not target and action_type not in {
+        ActionType.DRAFT_CREATE,
+        ActionType.SEND,
+        ActionType.DRIVE_UPLOAD,
+    }:
         raise ActionError("The action has no Gmail message id to act on.")
 
     match action_type:
