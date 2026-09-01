@@ -1136,6 +1136,47 @@ def cmd_task(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_document(args: argparse.Namespace) -> int:
+    """Print what was extracted from one attachment, and what was read off it.
+
+    The debugging tool for everything above: when a task or a filing gets a
+    fact wrong, the question is always what the text actually says, and
+    guessing at it from a search excerpt is how patterns get written for
+    documents nobody has looked at.
+    """
+    from app.services.filing import document_text_for
+    from app.services.invoices import read_invoice
+
+    with session_scope() as session:
+        attachment = _resolve_attachment(session, args.attachment)
+        text = document_text_for(session, attachment)
+
+        print(f"{attachment.filename or '(unnamed)'}   {len(text):,} characters")
+        if not text:
+            print("\nNo text was extracted. Try: python -m app.cli extract --problems")
+            return 0
+
+        if not args.raw:
+            facts = read_invoice(text)
+            money = f"{facts.amount} {facts.currency or ''}".strip() if facts.amount else None
+            print("\nRead as an invoice:")
+            for label, value in (
+                ("supplier", facts.supplier),
+                ("number", facts.number),
+                ("amount", money),
+                ("due date", facts.due_date.isoformat() if facts.due_date else None),
+                ("variable symbol", facts.variable_symbol),
+            ):
+                print(f"  {label:<16}: {value if value else '— not found'}")
+
+        print("\nText:")
+        body = text if args.full else text[: args.chars]
+        print(body)
+        if not args.full and len(text) > args.chars:
+            print(f"\n[{len(text) - args.chars:,} more characters — use --full]")
+    return 0
+
+
 def cmd_find(args: argparse.Namespace) -> int:
     """Search inside documents rather than message bodies."""
     from app.services.search import search_documents
@@ -1650,6 +1691,15 @@ def build_parser() -> argparse.ArgumentParser:
     task_parser.add_argument("--account", default="", help="which mailbox's Google account")
     task_parser.add_argument("--lists", action="store_true", help="show the task lists")
     task_parser.set_defaults(func=cmd_task)
+
+    document_parser = sub.add_parser(
+        "document", help="print one attachment's extracted text, and what was read off it"
+    )
+    document_parser.add_argument("attachment", help="attachment id, or its filename")
+    document_parser.add_argument("--chars", type=int, default=3000, help="how much to print")
+    document_parser.add_argument("--full", action="store_true", help="print all of it")
+    document_parser.add_argument("--raw", action="store_true", help="text only, no reading")
+    document_parser.set_defaults(func=cmd_document)
 
     find_parser = sub.add_parser("find", help="search inside document text")
     find_parser.add_argument("query")
