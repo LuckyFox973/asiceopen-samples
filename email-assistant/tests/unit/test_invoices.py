@@ -102,3 +102,59 @@ class TestRealInvoices:
 
     def test_empty_text_yields_nothing(self):
         assert not read_invoice("").anything
+
+
+REAL_ORANGE = """
+Mesačné splátky Suma
+Splátky spolu 142,94 €
+Spolu s DPH 304,68 €
+Typ služby:     Hlasový paušál     Internet       Televízia
+Dodávateľ: Orange Slovensko, a. s., Metodova 8, 821 08 Bratislava, IČO 35697270
+Faktúra č. 2864622723
+Variabilný symbol: 0397580739
+Dátum splatnosti: 07.01.2026
+"""
+
+
+class TestTheAmountIsTheOneOwed:
+    """From a real invoice, where the first figure on the page is not it."""
+
+    def test_the_total_with_vat_wins_over_an_instalment_subtotal(self):
+        """142,94 is "Splátky spolu"; 304,68 is what is owed. Taking the
+        first currency figure had a bill half paid."""
+        assert read_invoice(REAL_ORANGE).amount == "304.68"
+
+    def test_an_unlabelled_figure_is_not_taken_for_a_total(self):
+        """No label, no amount — a wrong number on a payment reminder is
+        worse than none."""
+        facts = read_invoice("Nejaka suma 99,90 € niekde v texte")
+        assert facts.amount is None
+
+    def test_a_labelled_total_is_still_found_when_it_stands_alone(self):
+        assert read_invoice("Celkom k úhrade 47,90 EUR").amount == "47.9"
+
+
+class TestTheSupplierComesFromTheDocument:
+    def test_the_issuer_is_read_from_the_document(self):
+        assert read_invoice(REAL_ORANGE).supplier == "Orange Slovensko, a. s."
+
+    def test_the_address_is_not_part_of_the_name(self):
+        """The label's line runs on into the street; a task title should not."""
+        assert "Metodova" not in (read_invoice(REAL_ORANGE).supplier or "")
+
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("Dodávateľ: Alza.sk s.r.o., Karadžičova 8", "Alza.sk s.r.o."),
+            ("Predávajúci: Anthropic PBC, San Francisco", "Anthropic PBC"),
+            ("Supplier: Example Ltd., London", "Example Ltd."),
+        ],
+    )
+    def test_the_forms_that_arrive(self, text, expected):
+        assert read_invoice(text).supplier == expected
+
+    def test_a_document_naming_no_supplier_reports_none(self):
+        assert read_invoice("Dobry den, v prilohe podklady.").supplier is None
+
+    def test_a_column_artefact_is_not_a_company(self):
+        assert read_invoice("Dodávateľ: 12345678").supplier is None

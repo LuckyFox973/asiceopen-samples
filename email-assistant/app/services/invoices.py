@@ -32,14 +32,38 @@ DUE_LABELS = (
 # 15.09.2026 · 15. 9. 2026 · 2026-09-15 · 15/09/2026
 DATE = r"(\d{1,2}\s*[.\-/]\s*\d{1,2}\s*[.\-/]\s*\d{2,4}|\d{4}-\d{2}-\d{2})"
 
+# Ordered: the total including VAT first, because a Slovak invoice prints
+# several subtotals above it and the first figure on the page is routinely an
+# instalment line.  Reading "Splátky spolu 142,94" as the amount owed, when
+# "Spolu s DPH" two lines below says 304,68, is how a bill gets half paid.
 AMOUNT_LABELS = (
+    r"spolu\s+s\s+DPH",
+    r"celkom\s+s\s+DPH",
+    r"celkov[aá]\s+suma\s+s\s+DPH",
     r"celkom\s+k\s+[uú]hrade",
     r"suma\s+k\s+[uú]hrade",
-    r"k\s+[uú]hrade",
+    r"suma\s+na\s+[uú]hradu",
     r"celkom\s+na\s+[uú]hradu",
+    r"k\s+[uú]hrade\s+spolu",
+    r"celkov[aá]\s+suma",
+    r"k\s+[uú]hrade",
+    r"total\s+incl[a-z.]*\s*VAT",
+    r"amount\s+payable",
     r"amount\s+due",
     r"total\s+due",
     r"total\s+amount",
+)
+
+# Who issued the invoice.  Taken from the document, because the sender of the
+# e-mail is often not the supplier: a forwarded invoice arrives from one of
+# my own companies, and naming that as the party to pay is nonsense.
+SUPPLIER_LABELS = (
+    r"dod[aá]vate[ľl]",
+    r"predávaj[uú]ci",
+    r"vystavil",
+    r"supplier",
+    r"issued\s+by",
+    r"from",
 )
 # 1 234,56 · 1.234,56 · 1,234.56 · 47.90
 MONEY = r"(-?\d[\d\s., ]*\d|\d)"
@@ -61,6 +85,7 @@ class InvoiceFacts:
     """What could be read. Every field is optional because every field can be
     missing, and inventing one is the failure this exists to avoid."""
 
+    supplier: str | None = None
     number: str | None = None
     variable_symbol: str | None = None
     due_date: date | None = None
@@ -74,6 +99,8 @@ class InvoiceFacts:
     def summary(self) -> str:
         """A one-line description, naming only what was actually found."""
         parts: list[str] = []
+        if self.supplier:
+            parts.append(self.supplier)
         if self.number:
             parts.append(f"no. {self.number}")
         if self.amount:
@@ -158,12 +185,10 @@ def find_amount(text: str) -> tuple[str | None, str | None]:
             if amount:
                 return amount, _currency(before or after)
 
-    # No labelled total: take a figure that names its currency, which at least
-    # cannot be a date or an account number.
-    fallback = re.search(PRICE, text)
-    if fallback and (fallback.group(1) or fallback.group(3)):
-        before, figure, after = fallback.groups()
-        return parse_amount(figure), _currency(before or after)
+    # Nothing labelled as a total: report no amount.  The first figure that
+    # names a currency is whatever the layout happened to print first — on a
+    # real invoice that was an instalment subtotal — and a wrong amount on a
+    # payment reminder is worse than no amount at all.
     return None, None
 
 
@@ -172,6 +197,37 @@ def _currency(raw: str | None) -> str | None:
         return None
     symbol = raw.strip().upper()
     return {"€": "EUR", "$": "USD", "KČ": "CZK", "KC": "CZK"}.get(symbol, symbol)
+
+
+def find_supplier(text: str) -> str | None:
+    """The company that issued the invoice, as the document names it."""
+    for label in SUPPLIER_LABELS:
+        match = re.search(rf"{label}\s*:?\s*([^\n]{{3,80}})", text, re.IGNORECASE)
+        if match:
+            name = _tidy_company(match.group(1))
+            if name:
+                return name
+    return None
+
+
+# A legal-form suffix ends a company name; whatever follows on the line is the
+# address, which does not belong in a task title.
+COMPANY_END = re.compile(
+    r"^(.*?\b(?:a\.?\s?s\.?|s\.?\s?r\.?\s?o\.?|spol\.?\s+s\s+r\.?\s?o\.?"
+    r"|k\.?\s?s\.?|v\.?\s?o\.?\s?s\.?|PBC|Inc\.?|Ltd\.?|LLC|GmbH))",
+    re.IGNORECASE,
+)
+
+
+def _tidy_company(raw: str) -> str | None:
+    cleaned = re.sub(r"\s+", " ", raw).strip(" :,-")
+    if not cleaned:
+        return None
+    match = COMPANY_END.match(cleaned)
+    if match:
+        cleaned = match.group(1).strip()
+    # A line of digits or a single letter is a column artefact, not a name.
+    return cleaned[:80] if re.search(r"[A-Za-zÀ-ž]{3}", cleaned) else None
 
 
 def read_invoice(text: str) -> InvoiceFacts:
@@ -184,6 +240,7 @@ def read_invoice(text: str) -> InvoiceFacts:
     symbol = VARIABLE_SYMBOL.search(text)
 
     return InvoiceFacts(
+        supplier=find_supplier(text),
         number=number.group(1).strip() if number else None,
         variable_symbol=re.sub(r"\s", "", symbol.group(1)) if symbol else None,
         due_date=find_due_date(text),

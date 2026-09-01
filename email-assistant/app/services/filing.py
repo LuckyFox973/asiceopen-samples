@@ -379,11 +379,10 @@ def task_for_attachment(
 
     settings = settings or get_settings()
     facts = read_invoice(document_text_for(session, attachment))
-    sender = _sender_of(session, attachment)
+    payee = facts.supplier or _external_sender(session, attachment)
 
     if not title:
-        subject = sender or attachment.filename or "attachment"
-        title = f"Pay {subject}"
+        title = f"Pay {payee or attachment.filename or 'invoice'}"
         if facts.number:
             title += f" — invoice {facts.number}"
         if facts.amount:
@@ -393,11 +392,11 @@ def task_for_attachment(
         line
         for line in (
             f"File: {attachment.filename}" if attachment.filename else "",
-            f"From: {sender}" if sender else "",
+            f"Arrived from: {_sender_of(session, attachment)}",
             facts.summary(),
             f"attachment={attachment.id}",
         )
-        if line
+        if line.strip().rstrip(":")
     )
 
     def create(payload: dict) -> ActionOutcome:
@@ -443,3 +442,20 @@ def _sender_of(session: Session, attachment: Attachment) -> str:
     if message is None:
         return ""
     return message.from_name or message.from_address or ""
+
+
+def _external_sender(session: Session, attachment: Attachment) -> str:
+    """The sender, unless it is one of my own companies.
+
+    A forwarded invoice arrives from one of them, and a task saying to pay
+    my own company is worse than one that just names the file: it looks
+    right, and it is wrong.
+    """
+    sender = _sender_of(session, attachment)
+    if not sender:
+        return ""
+    folded = fold(sender)
+    for folder in list_folders(session):
+        if any(fold(term) and fold(term) in folded for term in folder.match_terms):
+            return ""
+    return sender

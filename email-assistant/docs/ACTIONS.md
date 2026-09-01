@@ -178,6 +178,20 @@ right:
 - **The issue date is not the due date.** Both are labelled *Dátum*, and only
   one is when the money is owed, so the labels are matched most-specific first.
 
+Two more, both found on real invoices after the first version shipped:
+
+- **The amount is the total, not the first figure on the page.** A Slovak
+  invoice prints several subtotals above it; reading `Splátky spolu 142,94 €`
+  when `Spolu s DPH 304,68 €` sits two lines below has a bill half paid. Only
+  a labelled total counts — an unlabelled figure produces no amount at all.
+- **The payee comes from the document, not the envelope.** A forwarded
+  invoice arrives from one of the user's own companies, and "Pay Royalty Fox"
+  for an Orange bill looks right and is nonsense. The issuer is read from
+  `Dodávateľ:` and its equivalents; failing that the sender is used, unless
+  the sender matches a registered filing folder — never name your own company
+  as the party to pay. Who it arrived from is kept in the task's notes, since
+  that is how the mail is found again.
+
 Nothing is invented: every field is optional, and a document that is not an
 invoice produces a task with no date rather than a guessed one.
 

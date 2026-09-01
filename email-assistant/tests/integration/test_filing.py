@@ -388,3 +388,78 @@ class TestTaskFromInvoice:
                 FakeTasks(),
                 settings=settings_factory(tasks_enabled=False),
             )
+
+
+class TestTheTaskNamesTheRightPayee:
+    """A forwarded invoice arrives from one of the user's own companies."""
+
+    @pytest.fixture
+    def own_company(self, db_session):
+        from app.services.filing import register_folder
+
+        return register_folder(
+            db_session, "01_Royalty Fox", "folder-royalty", ["Royalty Fox", "12345678"]
+        )
+
+    def test_the_users_own_company_is_never_the_payee(
+        self, db_session, account, stored_invoice, own_company, settings_factory
+    ):
+        """It said "Pay Royalty Fox" for an Orange invoice: the sender was the
+        user's own company, forwarding it on."""
+        from app.db.models import EmailMessage
+        from app.services.filing import task_for_attachment
+
+        message = db_session.get(EmailMessage, stored_invoice.message_id)
+        message.from_name = "Royalty Fox s. r. o."
+        db_session.flush()
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session,
+            account,
+            stored_invoice,
+            tasks,
+            settings=settings_factory(tasks_enabled=True),
+        )
+        assert "Royalty Fox" not in tasks.created[0]["title"]
+
+    def test_an_outside_sender_is_still_used_when_the_document_names_none(
+        self, db_session, account, stored_invoice, settings_factory
+    ):
+        from app.db.models import EmailMessage
+        from app.services.filing import task_for_attachment
+
+        message = db_session.get(EmailMessage, stored_invoice.message_id)
+        message.from_name = "Anthropic"
+        db_session.flush()
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session,
+            account,
+            stored_invoice,
+            tasks,
+            settings=settings_factory(tasks_enabled=True),
+        )
+        assert "Anthropic" in tasks.created[0]["title"]
+
+    def test_the_notes_still_record_who_it_arrived_from(
+        self, db_session, account, stored_invoice, own_company, settings_factory
+    ):
+        """Excluded from the title, but not lost — it is how the mail is found."""
+        from app.db.models import EmailMessage
+        from app.services.filing import task_for_attachment
+
+        message = db_session.get(EmailMessage, stored_invoice.message_id)
+        message.from_name = "Royalty Fox s. r. o."
+        db_session.flush()
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session,
+            account,
+            stored_invoice,
+            tasks,
+            settings=settings_factory(tasks_enabled=True),
+        )
+        assert "Royalty Fox" in tasks.created[0]["notes"]
