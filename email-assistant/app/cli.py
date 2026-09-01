@@ -24,6 +24,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from googleapiclient.errors import HttpError
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
@@ -1731,6 +1732,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except ValidationError as exc:
         return _report_bad_configuration(exc)
+    except HttpError as exc:
+        # Google's own message says what is wrong and often links the fix;
+        # forty lines of googleapiclient stack say neither.
+        from app.gmail.actions import describe_http_error
+
+        print(f"error: {describe_http_error(exc)}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         print("\nStopped. Nothing already stored is lost — run the same command to resume.")
         return 130

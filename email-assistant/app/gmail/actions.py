@@ -14,6 +14,7 @@ operations instead.
 from __future__ import annotations
 
 import base64
+import re
 from dataclasses import dataclass
 from email.message import EmailMessage as MimeMessage
 from typing import Any
@@ -252,15 +253,53 @@ class GmailActions:
         )
 
 
+# Which Google service a failure came from, taken from the URL it was sent to.
+# Naming Gmail regardless was wrong the moment anything else was called: a
+# Tasks failure reported as "Gmail returned 403" sends the reader to the wrong
+# place entirely.
+SERVICE_NAMES = {
+    "gmail.googleapis.com": "Gmail",
+    "tasks.googleapis.com": "Google Tasks",
+    "www.googleapis.com/drive": "Google Drive",
+    "drive.googleapis.com": "Google Drive",
+}
+
+# Google's own console link for enabling an API, which it helpfully includes.
+ENABLE_URL = re.compile(r"https://console\.\S+")
+
+
+def service_of(exc: HttpError) -> str:
+    uri = getattr(exc, "uri", "") or ""
+    for fragment, name in SERVICE_NAMES.items():
+        if fragment in uri:
+            return name
+    return "Google"
+
+
 def describe_http_error(exc: HttpError) -> str:
-    """A readable reason, including the scope hint Google buries in the body."""
+    """A readable reason, including the hint Google buries in the body."""
     status = getattr(exc.resp, "status", "?")
     text = str(exc)
+    service = service_of(exc)
+
+    if status == 403 and "accessnotconfigured" in text.lower():
+        # Not a permission problem at all: the API itself is switched off for
+        # the project, which no amount of re-authorising will fix.
+        link = ENABLE_URL.search(text)
+        # The URL sits inside Google's quoted message, so trailing punctuation
+        # comes along with it.
+        address = link.group(0).rstrip("\"'.,)>") if link else ""
+        where = f"\n\nEnable it here:\n  {address}" if address else ""
+        return (
+            f"The {service} API is not enabled in your Google Cloud project. "
+            f"That is separate from the permission you granted — the scope is "
+            f"fine, the API is off.{where}"
+        )
     if status == 403 and "insufficient" in text.lower():
         return (
-            "Gmail refused the action: the mailbox was authorised without write "
-            "permission. Set GMAIL_WRITE_ENABLED=true and re-run the consent flow."
+            f"{service} refused the action: it was authorised without the "
+            "permission this needs. Check `check`, then re-run the consent flow."
         )
     if status == 404:
-        return "Gmail no longer has that message — it may already have been deleted."
-    return f"Gmail returned {status}: {text[:300]}"
+        return f"{service} no longer has that — it may already have been deleted."
+    return f"{service} returned {status}: {text[:300]}"

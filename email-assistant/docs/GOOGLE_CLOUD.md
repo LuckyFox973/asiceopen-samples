@@ -130,3 +130,24 @@ happens and audited after.
 Revoke at <https://myaccount.google.com/connections> — any stored token becomes
 useless immediately. Deleting the Cloud project removes the OAuth client for
 good.
+
+## Enabling the APIs
+
+Granting a scope and enabling an API are two different things, and the second
+is easy to miss: the consent screen will happily grant Tasks or Drive while
+the API itself is switched off for the project, and the first call then fails
+with 403 `accessNotConfigured`. No amount of re-authorising fixes it.
+
+Enable the ones you use, each one click:
+
+| | |
+|---|---|
+| Gmail | <https://console.cloud.google.com/apis/library/gmail.googleapis.com> |
+| Google Drive | <https://console.cloud.google.com/apis/library/drive.googleapis.com> |
+| Google Tasks | <https://console.cloud.google.com/apis/library/tasks.googleapis.com> |
+
+Pick the right project in the bar at the top first. After enabling, give it a
+minute to propagate.
+
+If one is missed, the error says so in words and repeats the link Google
+supplies — it is not something to go hunting for.

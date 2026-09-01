@@ -297,3 +297,84 @@ class TestImageSize:
 
     def test_an_unknown_format_reports_nothing_rather_than_guessing(self):
         assert image_size(b"not an image at all") is None
+
+
+class TestGoogleErrorsAreReadable:
+    """A Google failure should say which service and what to do about it."""
+
+    @staticmethod
+    def _error(status: int, message: str, reason: str, uri: str):
+        import json
+        from unittest.mock import Mock
+
+        from googleapiclient.errors import HttpError
+
+        body = json.dumps(
+            {"error": {"code": status, "message": message, "errors": [{"reason": reason}]}}
+        ).encode()
+        return HttpError(Mock(status=status, reason="Forbidden"), body, uri=uri)
+
+    def test_a_tasks_failure_does_not_blame_gmail(self):
+        """It said "Gmail returned 403" for a Tasks call, sending the reader
+        to entirely the wrong place."""
+        from app.gmail.actions import describe_http_error
+
+        exc = self._error(
+            403,
+            "Google Tasks API has not been used in project 1 before or it is disabled.",
+            "accessNotConfigured",
+            "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
+        )
+        described = describe_http_error(exc)
+        assert "Google Tasks" in described
+        assert "Gmail" not in described
+
+    def test_a_disabled_api_is_not_reported_as_a_permission_problem(self):
+        """No amount of re-authorising fixes an API that is switched off."""
+        from app.gmail.actions import describe_http_error
+
+        exc = self._error(
+            403,
+            "Enable it by visiting "
+            "https://console.developers.google.com/apis/api/tasks.googleapis.com/overview"
+            "?project=1 then retry.",
+            "accessNotConfigured",
+            "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
+        )
+        described = describe_http_error(exc)
+        assert "not enabled" in described
+        assert "the scope is fine" in described
+
+    def test_the_link_google_supplies_is_surfaced(self):
+        from app.gmail.actions import describe_http_error
+
+        exc = self._error(
+            403,
+            "Enable it by visiting "
+            "https://console.developers.google.com/apis/api/tasks.googleapis.com/overview"
+            "?project=1 then retry.",
+            "accessNotConfigured",
+            "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
+        )
+        described = describe_http_error(exc)
+        assert "https://console.developers.google.com/apis/api/tasks" in described
+        assert not described.rstrip().endswith(('"', "'", ".", ","))
+
+    def test_a_gmail_failure_still_names_gmail(self):
+        from app.gmail.actions import describe_http_error
+
+        exc = self._error(
+            403,
+            "Request had insufficient authentication scopes.",
+            "insufficientPermissions",
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/x/modify",
+        )
+        assert "Gmail" in describe_http_error(exc)
+
+    def test_a_drive_failure_names_drive(self):
+        from app.gmail.actions import describe_http_error
+
+        exc = self._error(
+            404, "File not found", "notFound", "https://www.googleapis.com/drive/v3/files/x"
+        )
+        assert "Google Drive" in describe_http_error(exc)
