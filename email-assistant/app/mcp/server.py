@@ -802,6 +802,71 @@ def unarchive_message(gmail_message_id: str) -> str:
 
 @server.tool(
     description=(
+        "Create a task in the user's Google Tasks — the list their Tasks side "
+        "panel shows. Give attachment_id for an invoice and the task carries "
+        "what the document says: the invoice number, the amount and the due "
+        "date, with the due date set on the task. Otherwise give a title. "
+        "Creating a task changes nothing the user would miss, so this does not "
+        "need approval — but do not invent due dates: only the document's own "
+        "are used."
+    )
+)
+@readable_errors
+def create_task(title: str = "", attachment_id: str = "", note: str = "") -> str:
+    """Put a reminder in Google Tasks."""
+    from app.db.models import Attachment, MailboxAccount
+    from app.services.accounts import list_accounts
+    from app.services.filing import task_for_attachment
+    from app.services.gtasks import TasksClient
+    from app.services.runner import build_credentials
+
+    settings = get_settings()
+    if not settings.tasks_enabled:
+        return (
+            "Google Tasks is switched off. The user can turn it on with "
+            "`config set TASKS_ENABLED true` and re-authorise."
+        )
+    if not title and not attachment_id:
+        return "Give a title, or an attachment_id to build the task from an invoice."
+
+    with session_scope() as session:
+        attachment = None
+        if attachment_id:
+            attachment = session.get(Attachment, _parse_uuid(attachment_id, "attachment_id"))
+            if attachment is None:
+                return f"No attachment {attachment_id}."
+            account = session.get(MailboxAccount, attachment.account_id)
+        else:
+            account = next(
+                (a for a in list_accounts(session) if "example.invalid" not in a.email), None
+            )
+            if account is None:
+                return "No mailbox is connected, so there is no account to write the task to."
+
+        tasks = TasksClient(build_credentials(session, account, settings))
+
+        if attachment is None:
+            created = tasks.create(
+                title=title, notes=note, list_id=tasks.resolve_list(settings.tasks_list)
+            )
+            return f"Created: {created.title}"
+
+        action = task_for_attachment(
+            session,
+            account,
+            attachment,
+            tasks,
+            title=title,
+            requested_by="user",
+            settings=settings,
+        )
+        if action.status != "executed":
+            return f"The task was not created: {action.error or action.status}"
+        return f"Created: {action.description}"
+
+
+@server.tool(
+    description=(
         "List the Drive folders that documents are filed into, one per company "
         "of the user's own, with the terms that identify each. Filing is by the "
         "company that was BILLED, not by who sent the invoice."

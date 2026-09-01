@@ -288,3 +288,103 @@ class TestFilingThenArchiving:
                 gmail=FakeGmailActions(),
                 settings=settings_factory(drive_write_enabled=False, gmail_write_enabled=True),
             )
+
+
+class FakeTasks:
+    """Records what would have been written to the task list."""
+
+    def __init__(self, fail: bool = False):
+        self.created: list[dict] = []
+        self.fail = fail
+
+    def resolve_list(self, name: str = "") -> str:
+        return name or "default-list"
+
+    def create(self, title, notes="", due=None, list_id=""):
+        from app.services.gtasks import Task
+
+        if self.fail:
+            raise RuntimeError("Tasks said no")
+        self.created.append({"title": title, "notes": notes, "due": due, "list_id": list_id})
+        return Task(id=f"task-{len(self.created)}", title=title, list_id=list_id)
+
+
+class TestTaskFromInvoice:
+    """A task that carries the facts, not just the supplier's name."""
+
+    @pytest.fixture
+    def tasks_settings(self, settings_factory):
+        return settings_factory(tasks_enabled=True, gmail_write_enabled=True)
+
+    def test_the_task_names_the_invoice_and_the_amount(
+        self, db_session, account, stored_invoice, tasks_settings
+    ):
+        from app.services.filing import task_for_attachment
+
+        tasks = FakeTasks()
+        task_for_attachment(db_session, account, stored_invoice, tasks, settings=tasks_settings)
+        title = tasks.created[0]["title"]
+        assert "2898-2388-5736" in title
+
+    def test_the_notes_carry_the_attachment_it_came_from(
+        self, db_session, account, stored_invoice, tasks_settings
+    ):
+        """So the task leads back to the document, not just to a memory."""
+        from app.services.filing import task_for_attachment
+
+        tasks = FakeTasks()
+        task_for_attachment(db_session, account, stored_invoice, tasks, settings=tasks_settings)
+        assert str(stored_invoice.id) in tasks.created[0]["notes"]
+
+    def test_a_given_title_is_used_as_it_is(
+        self, db_session, account, stored_invoice, tasks_settings
+    ):
+        from app.services.filing import task_for_attachment
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session,
+            account,
+            stored_invoice,
+            tasks,
+            title="Zaplatiť Orange",
+            settings=tasks_settings,
+        )
+        assert tasks.created[0]["title"] == "Zaplatiť Orange"
+
+    def test_it_is_recorded_as_an_executed_action(
+        self, db_session, account, stored_invoice, tasks_settings
+    ):
+        from app.services.filing import task_for_attachment
+
+        action = task_for_attachment(
+            db_session, account, stored_invoice, FakeTasks(), settings=tasks_settings
+        )
+        assert action.action_type == ActionType.TASK_CREATE.value
+        assert action.status == ActionStatus.EXECUTED.value
+
+    def test_a_failure_is_recorded_rather_than_raised(
+        self, db_session, account, stored_invoice, tasks_settings
+    ):
+        from app.services.filing import task_for_attachment
+
+        action = task_for_attachment(
+            db_session, account, stored_invoice, FakeTasks(fail=True), settings=tasks_settings
+        )
+        assert action.status == ActionStatus.FAILED.value
+        assert "Tasks said no" in (action.error or "")
+
+    def test_it_is_refused_when_tasks_are_switched_off(
+        self, db_session, account, stored_invoice, settings_factory
+    ):
+        from app.services.actions import ActionError
+        from app.services.filing import task_for_attachment
+
+        with pytest.raises(ActionError, match="Tasks"):
+            task_for_attachment(
+                db_session,
+                account,
+                stored_invoice,
+                FakeTasks(),
+                settings=settings_factory(tasks_enabled=False),
+            )

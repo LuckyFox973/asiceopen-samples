@@ -709,6 +709,7 @@ class ActionType(enum.StrEnum):
     DELETE_PERMANENT = "delete_permanent"
     SEND = "send"
     DRIVE_UPLOAD = "drive_upload"
+    TASK_CREATE = "task_create"
 
 
 class ActionStatus(enum.StrEnum):

@@ -5,7 +5,7 @@ is, but **how bad it is if the assistant is wrong.**
 
 | Tier | Actions | When it runs |
 |---|---|---|
-| **automatic** | apply a managed label, write a draft, unarchive, restore from bin | immediately |
+| **automatic** | apply a managed label, write a draft, create a task, unarchive, restore from bin | immediately |
 | **configurable** | archive, remove a label | immediately once `GMAIL_AUTO_ARCHIVE=true`, otherwise it asks |
 | **configurable** | file a document to Drive | immediately once `DRIVE_AUTO_FILE=true`, otherwise it asks |
 | **approval** | move to bin, permanent delete, send | never without an explicit yes |
@@ -158,3 +158,42 @@ without touching anything, and `file_to_drive` does it. The last one's
 description tells the model plainly that the user must ask for it — filing
 happens once an invoice is paid or booked, and only its recipient knows when
 that was.
+
+
+## Tasks
+
+A task called "pay Orange" is a reminder to go and look something up. A task
+called "Pay Orange — invoice 2897510916, 47.90 EUR" with its due date set is
+the answer, and the difference is only that the amount and the date were read
+out of the document — which has already happened, since the text is extracted
+and indexed.
+
+Reading them is patterns, not a model. Slovak, Czech and English invoices
+label the due date half a dozen ways, and both `47,90 EUR` and `$120.00`
+arrive, sometimes in the same mailbox. Two details decide whether a date is
+right:
+
+- **The day comes first.** A Slovak supplier writing `09.05.2026` means the
+  ninth of May; reading it the American way moves a payment four months.
+- **The issue date is not the due date.** Both are labelled *Dátum*, and only
+  one is when the money is owed, so the labels are matched most-specific first.
+
+Nothing is invented: every field is optional, and a document that is not an
+invoice produces a task with no date rather than a guessed one.
+
+Creating a task sits in the **automatic** tier, alongside writing a draft —
+both prepare something for the user and change nothing they would miss. It is
+still recorded in `pending_action` and the audit log like everything else.
+
+```bash
+python -m app.cli config set TASKS_ENABLED true
+python -m app.cli auth-url            # Google must grant Tasks
+
+python -m app.cli task --lists
+python -m app.cli task <attachment-id>                  # from an invoice
+python -m app.cli task --title "Zavolat sudu" --due 2026-09-15
+```
+
+A due date in Google Tasks is a date, not a moment. The API takes RFC 3339 and
+ignores the time, so midday UTC is sent — a local midnight would land the task
+on the previous day for anyone east of UTC.

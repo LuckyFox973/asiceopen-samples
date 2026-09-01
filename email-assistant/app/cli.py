@@ -1062,6 +1062,79 @@ def _drive_credentials(session, account, settings):
     return build_credentials(session, account, settings)
 
 
+def cmd_task(args: argparse.Namespace) -> int:
+    """Put a reminder in Google Tasks, from an invoice or from a sentence."""
+    from app.db.models import MailboxAccount
+    from app.services.filing import task_for_attachment
+    from app.services.gtasks import TasksClient
+    from app.services.runner import build_credentials
+
+    settings = get_settings()
+    if not settings.tasks_enabled:
+        print("error: TASKS_ENABLED is not set.", file=sys.stderr)
+        print(
+            "\n  python -m app.cli config set TASKS_ENABLED true\n"
+            "  python -m app.cli auth-url        (Google must grant Tasks)",
+            file=sys.stderr,
+        )
+        return 1
+
+    with session_scope() as session:
+        if args.attachment:
+            attachment = _resolve_attachment(session, args.attachment)
+            account = session.get(MailboxAccount, attachment.account_id)
+        else:
+            account = _resolve_account(session, args.account) if args.account else None
+            if account is None:
+                accounts = list_accounts(session)
+                account = next((a for a in accounts if "example.invalid" not in a.email), None)
+            if account is None:
+                print("No mailbox to attribute the task to.", file=sys.stderr)
+                return 1
+            attachment = None
+
+        tasks = TasksClient(build_credentials(session, account, settings))
+
+        if args.lists:
+            for list_id, title in tasks.lists():
+                print(f"{title}\n    {list_id}")
+            return 0
+
+        if attachment is None:
+            if not args.title:
+                print("usage: task --title TEXT | task <attachment>", file=sys.stderr)
+                return 1
+            from datetime import date as date_type
+
+            due = date_type.fromisoformat(args.due) if args.due else None
+            created = tasks.create(
+                title=args.title,
+                notes=args.note or "",
+                due=due,
+                list_id=tasks.resolve_list(settings.tasks_list),
+            )
+            print(f"Created: {created.title}")
+            return 0
+
+        action = task_for_attachment(
+            session,
+            account,
+            attachment,
+            tasks,
+            title=args.title,
+            requested_by="user",
+            settings=settings,
+        )
+        if action.status != "executed":
+            print(f"Not created: {action.error or action.status}", file=sys.stderr)
+            return 1
+        print(f"Created: {action.description}")
+        result = action.result or {}
+        if result.get("task_id"):
+            print("It is in the Tasks panel now.")
+        return 0
+
+
 def cmd_find(args: argparse.Namespace) -> int:
     """Search inside documents rather than message bodies."""
     from app.services.search import search_documents
@@ -1565,6 +1638,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="say what would happen, change nothing"
     )
     drive_parser.set_defaults(func=cmd_file_to_drive)
+
+    task_parser = sub.add_parser("task", help="put a reminder in Google Tasks")
+    task_parser.add_argument(
+        "attachment", nargs="?", default="", help="an invoice to build the task from"
+    )
+    task_parser.add_argument("--title", default="", help="the task's title")
+    task_parser.add_argument("--due", default="", help="YYYY-MM-DD, for a task without an invoice")
+    task_parser.add_argument("--note", default="")
+    task_parser.add_argument("--account", default="", help="which mailbox's Google account")
+    task_parser.add_argument("--lists", action="store_true", help="show the task lists")
+    task_parser.set_defaults(func=cmd_task)
 
     find_parser = sub.add_parser("find", help="search inside document text")
     find_parser.add_argument("query")

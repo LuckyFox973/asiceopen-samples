@@ -40,6 +40,8 @@ DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 # drive.file reaches nothing the application did not itself create, so a
 # pre-existing folder is invisible to it and an upload there fails 404.
 DRIVE_FULL_SCOPE = "https://www.googleapis.com/auth/drive"
+# Not restricted: creating a reminder for oneself is not sensitive data.
+TASKS_SCOPE = "https://www.googleapis.com/auth/tasks"
 
 # Labels, archive, trash/untrash, drafts, send.  Everything the assistant needs
 # to act on a mailbox — except bypassing the trash.
@@ -162,6 +164,14 @@ class Settings(BaseSettings):
     # been paid or booked, and only its recipient knows when that was.
     drive_auto_file: bool = False
 
+    # --- Google Tasks ------------------------------------------------------
+    # Writing a reminder to the user's own task list. Off until asked for,
+    # like everything else that reaches outside the mailbox.
+    tasks_enabled: bool = False
+    # Which list to write into. Empty means the default one, which is what
+    # the Tasks side panel shows.
+    tasks_list: str = ""
+
     # --- Internal job auth -------------------------------------------------
     job_auth_token: str = ""
 
@@ -219,6 +229,8 @@ class Settings(BaseSettings):
             scopes.append(DRIVE_FULL_SCOPE)
         elif self.backup_enabled and self.backup_backend == "gdrive":
             scopes.append(DRIVE_FILE_SCOPE)
+        if self.tasks_enabled:
+            scopes.append(TASKS_SCOPE)
         return scopes
 
     def oauth_configured(self) -> bool:

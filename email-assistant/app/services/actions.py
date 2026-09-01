@@ -60,6 +60,7 @@ RISK_TIERS: dict[ActionType, RiskTier] = {
     ActionType.DRAFT_UPDATE: RiskTier.AUTOMATIC,
     ActionType.UNARCHIVE: RiskTier.AUTOMATIC,
     ActionType.UNTRASH: RiskTier.AUTOMATIC,
+    ActionType.TASK_CREATE: RiskTier.AUTOMATIC,
     ActionType.LABEL_REMOVE: RiskTier.CONFIGURABLE,
     ActionType.ARCHIVE: RiskTier.CONFIGURABLE,
     ActionType.DRIVE_UPLOAD: RiskTier.CONFIGURABLE,
@@ -137,7 +138,12 @@ def propose(
     """Record an intended action. Does not execute it."""
     settings = settings or get_settings()
 
-    if request.action_type is ActionType.DRIVE_UPLOAD:
+    if request.action_type is ActionType.TASK_CREATE:
+        if not settings.tasks_enabled:
+            raise ActionError(
+                "Google Tasks is disabled. Set TASKS_ENABLED=true and re-run the consent flow."
+            )
+    elif request.action_type is ActionType.DRIVE_UPLOAD:
         if not settings.drive_write_enabled:
             raise ActionError(
                 "Filing to Drive is disabled. It needs write access to Drive, "
@@ -280,9 +286,9 @@ def execute(
     target = action.gmail_target_id
 
     try:
-        if action_type is ActionType.DRIVE_UPLOAD:
+        if action_type in {ActionType.DRIVE_UPLOAD, ActionType.TASK_CREATE}:
             if upload is None:
-                raise ActionError("No Drive uploader was supplied for a filing action.")
+                raise ActionError(f"No handler was supplied for {action_type.value}.")
             outcome = upload(payload)
         else:
             outcome = _dispatch(gmail, action_type, target, payload)
@@ -315,6 +321,7 @@ def _dispatch(gmail: GmailActions, action_type: ActionType, target: str | None, 
         ActionType.DRAFT_CREATE,
         ActionType.SEND,
         ActionType.DRIVE_UPLOAD,
+        ActionType.TASK_CREATE,
     }:
         raise ActionError("The action has no Gmail message id to act on.")
 

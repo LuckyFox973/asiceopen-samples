@@ -351,3 +351,95 @@ def _decide_and_run(
         # Proposed by the agent and not released by its setting: it waits.
         return action
     return run(action)
+
+
+# ---------------------------------------------------------------------------
+# Turning an invoice into a reminder
+# ---------------------------------------------------------------------------
+
+
+def task_for_attachment(
+    session: Session,
+    account: MailboxAccount,
+    attachment: Attachment,
+    tasks,
+    title: str = "",
+    requested_by: str = "user",
+    settings: Settings | None = None,
+) -> PendingAction:
+    """A task carrying what the invoice actually says.
+
+    "Pay Orange" is a reminder to go and look something up.  "Pay Orange
+    2897510916 — 47.90 EUR, due 2026-09-15" is the answer, and the difference
+    is only that the due date and the amount were read out of the document,
+    which has already happened.
+    """
+    from app.services.actions import ActionRequest, approve, execute, propose
+    from app.services.invoices import read_invoice
+
+    settings = settings or get_settings()
+    facts = read_invoice(document_text_for(session, attachment))
+    sender = _sender_of(session, attachment)
+
+    if not title:
+        subject = sender or attachment.filename or "attachment"
+        title = f"Pay {subject}"
+        if facts.number:
+            title += f" — invoice {facts.number}"
+        if facts.amount:
+            title += f", {facts.amount} {facts.currency or ''}".rstrip()
+
+    notes = "\n".join(
+        line
+        for line in (
+            f"File: {attachment.filename}" if attachment.filename else "",
+            f"From: {sender}" if sender else "",
+            facts.summary(),
+            f"attachment={attachment.id}",
+        )
+        if line
+    )
+
+    def create(payload: dict) -> ActionOutcome:
+        created = tasks.create(
+            title=payload["title"],
+            notes=payload.get("notes", ""),
+            due=facts.due_date,
+            list_id=tasks.resolve_list(settings.tasks_list),
+        )
+        when = f" due {facts.due_date.isoformat()}" if facts.due_date else ""
+        return ActionOutcome(
+            ok=True,
+            detail=f"task created{when}",
+            data={"task_id": created.id, "title": created.title},
+            undo_hint="Delete it in Google Tasks to undo.",
+        )
+
+    return _decide_and_run(
+        session,
+        account,
+        ActionRequest(
+            action_type=ActionType.TASK_CREATE,
+            description=title,
+            target_type="attachment",
+            target_id=attachment.id,
+            payload={
+                "title": title,
+                "notes": notes,
+                "due": facts.due_date.isoformat() if facts.due_date else None,
+            },
+            requested_by=requested_by,
+        ),
+        requested_by=requested_by,
+        settings=settings,
+        run=lambda action: execute(session, action, gmail=None, settings=settings, upload=create),
+        propose=propose,
+        approve=approve,
+    )
+
+
+def _sender_of(session: Session, attachment: Attachment) -> str:
+    message = session.get(EmailMessage, attachment.message_id)
+    if message is None:
+        return ""
+    return message.from_name or message.from_address or ""
