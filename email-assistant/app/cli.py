@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 from googleapiclient.errors import HttpError
 from pydantic import ValidationError
 from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.core.config import Settings, get_settings
 from app.core.crypto import generate_key
@@ -1732,6 +1732,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except ValidationError as exc:
         return _report_bad_configuration(exc)
+    except ProgrammingError as exc:
+        return _report_schema_error(exc)
     except HttpError as exc:
         # Google's own message says what is wrong and often links the fix;
         # forty lines of googleapiclient stack say neither.
@@ -1742,6 +1744,58 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\nStopped. Nothing already stored is lost — run the same command to resume.")
         return 130
+
+
+def _report_schema_error(exc: ProgrammingError) -> int:
+    """A missing table almost always means the migrations have not been run.
+
+    Pulling new code and forgetting `alembic upgrade head` is a step it is
+    easy to leave out of an instruction, so the failure should name the fix
+    rather than print the query that could not run.
+    """
+    detail = _first_line(exc)
+    if "does not exist" not in detail.lower():
+        print(f"error: {detail}", file=sys.stderr)
+        return 1
+
+    print(
+        f"error: the database is missing something the code expects.\n\n  {detail}\n",
+        file=sys.stderr,
+    )
+    if migrations_pending():
+        print("The database schema is behind the code.", file=sys.stderr)
+    print("Bring it up to date with:\n    ./.venv/bin/alembic upgrade head", file=sys.stderr)
+    return 1
+
+
+def migrations_pending() -> bool:
+    """Whether the database is at a revision older than the code's newest.
+
+    A boolean, not a count: alembic's revision walk is easy to be off by one
+    on, and "how many" adds nothing to "run the upgrade".
+    """
+    import logging as _logging
+
+    # Constructing a ScriptDirectory logs its plugin loading at INFO, which
+    # this process sends to stdout — over the message this supports.
+    alembic_log = _logging.getLogger("alembic")
+    was = alembic_log.level
+    alembic_log.setLevel(_logging.ERROR)
+    try:
+        from alembic.script import ScriptDirectory
+        from sqlalchemy import text
+
+        from app.core.config import PROJECT_ROOT
+        from app.db.session import session_scope as scope
+
+        script = ScriptDirectory(str(PROJECT_ROOT / "alembic"))
+        with scope() as session:
+            current = session.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        return bool(current) and current != script.get_current_head()
+    except Exception:  # noqa: BLE001 - best effort; the advice stands either way
+        return False
+    finally:
+        alembic_log.setLevel(was)
 
 
 def _report_bad_configuration(exc: ValidationError) -> int:

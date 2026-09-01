@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, ValidationError
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app import cli
 from app.cli import unreachable_callback
@@ -441,3 +441,53 @@ class TestDesktopRegistration:
         self._register(config)
         written = json.loads(config.read_text())["mcpServers"]["email-assistant"]["command"]
         assert Path(written).is_absolute()
+
+
+class TestMissingTable:
+    """Pulling new code without running the migrations is easy to do, and the
+    query that could not run is not the useful half of the answer."""
+
+    @staticmethod
+    def _missing(relation: str = "filing_folder") -> ProgrammingError:
+        return ProgrammingError(
+            f"SELECT * FROM {relation}",
+            {},
+            Exception(f'relation "{relation}" does not exist'),
+        )
+
+    def test_it_names_the_command_that_fixes_it(self, capsys, monkeypatch):
+        monkeypatch.setattr(cli, "migrations_pending", lambda: True)
+        assert cli._report_schema_error(self._missing()) == 1
+        err = capsys.readouterr().err
+        assert "alembic upgrade head" in err
+        assert "behind the code" in err
+
+    def test_the_missing_relation_is_named(self, capsys, monkeypatch):
+        monkeypatch.setattr(cli, "migrations_pending", lambda: False)
+        cli._report_schema_error(self._missing("filing_folder"))
+        assert "filing_folder" in capsys.readouterr().err
+
+    def test_a_schema_at_head_is_not_blamed_on_migrations(self, capsys, monkeypatch):
+        """The table can be missing for other reasons; do not assert a cause."""
+        monkeypatch.setattr(cli, "migrations_pending", lambda: False)
+        cli._report_schema_error(self._missing())
+        err = capsys.readouterr().err
+        assert "behind the code" not in err
+        assert "alembic upgrade head" in err
+
+    def test_an_unrelated_programming_error_is_passed_through(self, capsys, monkeypatch):
+        monkeypatch.setattr(cli, "migrations_pending", lambda: True)
+        exc = ProgrammingError("SELECT 1", {}, Exception("syntax error at or near"))
+        assert cli._report_schema_error(exc) == 1
+        assert "alembic" not in capsys.readouterr().err
+
+    def test_main_reports_it_without_a_traceback(self, capsys, monkeypatch):
+        def explode(_args):
+            raise self._missing()
+
+        monkeypatch.setattr(cli, "cmd_stats", explode)
+        monkeypatch.setattr(cli, "migrations_pending", lambda: True)
+        assert cli.main(["stats"]) == 1
+        err = capsys.readouterr().err
+        assert "Traceback" not in err
+        assert "alembic upgrade head" in err

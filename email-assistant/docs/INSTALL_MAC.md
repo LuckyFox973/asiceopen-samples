@@ -243,6 +243,10 @@ cd email-assistant
 ./.venv/bin/alembic upgrade head
 ```
 
+The last line matters and is easy to leave out of an instruction: new
+code often needs a new table. If it is skipped, the next command says so and
+names it, rather than printing the query that failed.
+
 Restart `uvicorn` afterwards — it holds the old code in memory. Nothing you
 have already synchronised is lost; migrations only add to the database.
 

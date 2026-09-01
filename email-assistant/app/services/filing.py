@@ -33,6 +33,7 @@ from app.db.models import (
     PendingAction,
 )
 from app.gmail.actions import ActionOutcome, GmailActions
+from app.gmail.addresses import OwnedAddressSet
 from app.services.drive import DriveClient
 from app.services.storage import AttachmentStorage
 
@@ -379,12 +380,15 @@ def task_for_attachment(
 
     settings = settings or get_settings()
     facts = read_invoice(document_text_for(session, attachment))
-    payee = facts.supplier or _external_sender(session, attachment)
+    payee = facts.supplier or _external_sender(session, account, attachment)
 
     if not title:
-        title = f"Pay {payee or attachment.filename or 'invoice'}"
+        # No payee that can be trusted: name the invoice instead of guessing.
+        # "Pay invoice 2864622723 — 304.68 EUR" is less convenient than a
+        # company name and is at least true.
+        title = f"Pay {payee}" if payee else "Pay invoice"
         if facts.number:
-            title += f" — invoice {facts.number}"
+            title += f" — invoice {facts.number}" if payee else f" {facts.number}"
         if facts.amount:
             title += f", {facts.amount} {facts.currency or ''}".rstrip()
 
@@ -444,16 +448,34 @@ def _sender_of(session: Session, attachment: Attachment) -> str:
     return message.from_name or message.from_address or ""
 
 
-def _external_sender(session: Session, attachment: Attachment) -> str:
-    """The sender, unless it is one of my own companies.
+def _external_sender(session: Session, account: MailboxAccount, attachment: Attachment) -> str:
+    """The sender, unless it is me.
 
-    A forwarded invoice arrives from one of them, and a task saying to pay
-    my own company is worse than one that just names the file: it looks
-    right, and it is wrong.
+    A forwarded invoice arrives from one of my own addresses, and a task
+    saying to pay my own company is worse than one that just names the
+    invoice: it looks right, and it is wrong.
+
+    The mailbox's own addresses are the test that always works — the filing
+    folders are checked too, but only some people register those, and the
+    first real invoice this met was forwarded from royalty@ by someone who
+    had registered none.
     """
-    sender = _sender_of(session, attachment)
+    message = session.get(EmailMessage, attachment.message_id)
+    if message is None:
+        return ""
+
+    # Anything not inbound came from me by definition.
+    if message.direction and message.direction != "inbound":
+        return ""
+
+    mine = OwnedAddressSet([address.address for address in account.addresses])
+    if message.from_address and message.from_address in mine:
+        return ""
+
+    sender = message.from_name or message.from_address or ""
     if not sender:
         return ""
+
     folded = fold(sender)
     for folder in list_folders(session):
         if any(fold(term) and fold(term) in folded for term in folder.match_terms):

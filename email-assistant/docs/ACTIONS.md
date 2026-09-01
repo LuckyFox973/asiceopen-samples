@@ -187,10 +187,15 @@ Two more, both found on real invoices after the first version shipped:
 - **The payee comes from the document, not the envelope.** A forwarded
   invoice arrives from one of the user's own companies, and "Pay Royalty Fox"
   for an Orange bill looks right and is nonsense. The issuer is read from
-  `Dodávateľ:` and its equivalents; failing that the sender is used, unless
-  the sender matches a registered filing folder — never name your own company
-  as the party to pay. Who it arrived from is kept in the task's notes, since
-  that is how the mail is found again.
+  `Dodávateľ:` and its equivalents. Failing that the sender is used — but
+  only when it is genuinely external: not one of the mailbox's own addresses,
+  not a message the user sent, and not matching a registered filing folder.
+  The first real invoice this met had been forwarded from `royalty@` by
+  someone who had registered no folders at all, which is why the mailbox's own
+  addresses are the test that carries the weight. With no trustworthy payee it
+  says `Pay invoice 2864622723` — less convenient than a company name, and
+  true. Who it arrived from is kept in the notes, since that is how the mail
+  is found again.
 
 Nothing is invented: every field is optional, and a document that is not an
 invoice produces a task with no date rather than a guessed one.

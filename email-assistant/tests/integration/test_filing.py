@@ -463,3 +463,132 @@ class TestTheTaskNamesTheRightPayee:
             settings=settings_factory(tasks_enabled=True),
         )
         assert "Royalty Fox" in tasks.created[0]["notes"]
+
+
+class TestAForwardedInvoice:
+    """The real case: an Orange bill forwarded from one of the user's own
+    addresses, by someone who had registered no filing folders at all."""
+
+    @staticmethod
+    def _forget_the_supplier(db_session, attachment):
+        """A document that names no supplier, so the sender is consulted.
+
+        Where the document does name one it wins outright, which is why the
+        first version of these tests kept finding Anthropic.
+        """
+        from app.db.models import DocumentText
+
+        document = db_session.scalar(
+            select(DocumentText).where(DocumentText.blob_id == attachment.blob_id)
+        )
+        document.text = "Faktura c. 2864622723\nSpolu s DPH 304,68 EUR"
+        db_session.flush()
+
+    @pytest.fixture
+    def forwarded(self, db_session, account, stored_invoice):
+        from app.db.models import EmailMessage, MailboxAddress
+
+        self._forget_the_supplier(db_session, stored_invoice)
+
+        db_session.add(
+            MailboxAddress(account_id=account.id, address="royalty@foxgroup.sk", source="send_as")
+        )
+        message = db_session.get(EmailMessage, stored_invoice.message_id)
+        message.from_name = "Royalty Fox s. r. o."
+        message.from_address = "royalty@foxgroup.sk"
+        message.direction = "internal"
+        db_session.flush()
+        db_session.refresh(account)
+        return stored_invoice
+
+    def test_my_own_address_is_never_the_payee(
+        self, db_session, account, forwarded, settings_factory
+    ):
+        """The filing-folder check could not help: none were registered."""
+        from app.services.filing import list_folders, task_for_attachment
+
+        assert list_folders(db_session) == []
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session, account, forwarded, tasks, settings=settings_factory(tasks_enabled=True)
+        )
+        assert "Royalty Fox" not in tasks.created[0]["title"]
+
+    def test_the_invoice_is_named_instead(self, db_session, account, forwarded, settings_factory):
+        """Less convenient than a company name, and at least true."""
+        from app.services.filing import task_for_attachment
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session, account, forwarded, tasks, settings=settings_factory(tasks_enabled=True)
+        )
+        assert tasks.created[0]["title"].startswith("Pay invoice")
+
+    def test_a_genuinely_external_sender_survives(
+        self, db_session, account, stored_invoice, settings_factory
+    ):
+        from app.db.models import EmailMessage
+        from app.services.filing import task_for_attachment
+
+        self._forget_the_supplier(db_session, stored_invoice)
+        message = db_session.get(EmailMessage, stored_invoice.message_id)
+        message.from_name = "Orange Slovensko"
+        message.from_address = "faktura@orange.sk"
+        message.direction = "inbound"
+        db_session.flush()
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session,
+            account,
+            stored_invoice,
+            tasks,
+            settings=settings_factory(tasks_enabled=True),
+        )
+        assert "Orange Slovensko" in tasks.created[0]["title"]
+
+    def test_a_message_i_sent_is_never_the_payee(
+        self, db_session, account, stored_invoice, settings_factory
+    ):
+        from app.db.models import EmailMessage
+        from app.services.filing import task_for_attachment
+
+        self._forget_the_supplier(db_session, stored_invoice)
+        message = db_session.get(EmailMessage, stored_invoice.message_id)
+        message.from_name = "Some Company"
+        message.direction = "outbound"
+        db_session.flush()
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session,
+            account,
+            stored_invoice,
+            tasks,
+            settings=settings_factory(tasks_enabled=True),
+        )
+        assert "Some Company" not in tasks.created[0]["title"]
+
+    def test_the_document_outranks_the_sender(
+        self, db_session, account, stored_invoice, settings_factory
+    ):
+        """When the invoice names its issuer, who forwarded it is irrelevant."""
+        from app.db.models import EmailMessage
+        from app.services.filing import task_for_attachment
+
+        message = db_session.get(EmailMessage, stored_invoice.message_id)
+        message.from_name = "Royalty Fox s. r. o."
+        message.direction = "inbound"
+        db_session.flush()
+
+        tasks = FakeTasks()
+        task_for_attachment(
+            db_session,
+            account,
+            stored_invoice,
+            tasks,
+            settings=settings_factory(tasks_enabled=True),
+        )
+        assert "Anthropic" in tasks.created[0]["title"]
+        assert "Royalty Fox" not in tasks.created[0]["title"]
