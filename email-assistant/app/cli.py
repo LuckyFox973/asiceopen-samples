@@ -40,6 +40,7 @@ from app.db.models import (
     EmailMessage,
     EmailThread,
     MailboxAccount,
+    SyncState,
 )
 from app.db.session import session_scope
 from app.services.access import (
@@ -53,6 +54,7 @@ from app.services.accounts import get_account_by_email, list_accounts
 from app.services.maintenance import find_unreferenced_blobs, prune_orphan_contacts
 from app.services.runner import run_sync
 from app.services.search import MessageSearchQuery, search_messages
+from app.services.sync import needs_full_pass
 
 
 def _resolve_account(session, identifier: str) -> MailboxAccount:
@@ -255,17 +257,26 @@ def cmd_accounts(_args: argparse.Namespace) -> int:
     return 0
 
 
-def _sync_once(args: argparse.Namespace) -> tuple[str, str | None, dict[str, int]]:
+def _sync_once(
+    args: argparse.Namespace, announce: bool = False
+) -> tuple[str, str | None, dict[str, int]]:
     """One pass, in its own transaction, so progress survives an interruption."""
     with session_scope() as session:
         account = _resolve_account(session, args.account)
         if args.start_date:
-            account.sync_start_date = date.fromisoformat(args.start_date)
+            account.sync_start_date = args.start_date
             session.flush()
+        if announce:
+            _announce_plan(
+                account.sync_state,
+                account.sync_start_date or get_settings().sync_start_date,
+                mode=args.mode,
+                forced=args.full,
+            )
         run = run_sync(
             session,
             account,
-            mode=args.mode,
+            mode="initial" if args.full else args.mode,
             download_attachments=not args.no_attachments,
         )
         return (
@@ -281,6 +292,39 @@ def _sync_once(args: argparse.Namespace) -> tuple[str, str | None, dict[str, int
         )
 
 
+def _a_date(value: str) -> date:
+    """Reject a mistyped date at the boundary, not with a traceback."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a date — write it as YYYY-MM-DD, for example 2019-01-01"
+        ) from None
+
+
+def _announce_plan(state: SyncState | None, requested: date, *, mode: str, forced: bool) -> None:
+    """Say what the run is about to do, before it does it.
+
+    Re-walking years of mail is not a small thing, and the operator should read
+    it here rather than infer it from a message count an hour later.
+    """
+    if state is None or state.initial_sync_completed_at is None:
+        return  # A first walk needs no warning; that is what it is for.
+    if mode == "incremental":
+        return
+    if not (forced or mode == "initial" or needs_full_pass(state, requested)):
+        return
+
+    covered = state.initial_sync_start_date
+    if covered and requested < covered:
+        print(
+            f"The last full pass only went back to {covered:%Y-%m-%d}, "
+            "so anything older than that was never fetched."
+        )
+    print(f"Full pass: walking the mailbox from {requested:%Y-%m-%d} onwards.")
+    print("Mail already stored is not stored twice. Safe to interrupt — it resumes.\n")
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     """Synchronise until the mailbox is caught up.
 
@@ -292,7 +336,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     passes = 0
 
     while True:
-        status, error, counts = _sync_once(args)
+        status, error, counts = _sync_once(args, announce=passes == 0)
         passes += 1
         for key, value in counts.items():
             totals[key] += value
@@ -1564,7 +1608,17 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser = sub.add_parser("sync", help="synchronise a mailbox")
     sync_parser.add_argument("account", help="mailbox e-mail address or id")
     sync_parser.add_argument("--mode", choices=["auto", "initial", "incremental"], default="auto")
-    sync_parser.add_argument("--start-date", help="override the start date (YYYY-MM-DD)")
+    sync_parser.add_argument(
+        "--start-date",
+        type=_a_date,
+        help="fetch mail from this date onwards (YYYY-MM-DD); moving it earlier "
+        "than the last full pass fetches the older mail too",
+    )
+    sync_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="walk the whole mailbox again from the start date, without asking the history cursor",
+    )
     sync_parser.add_argument("--no-attachments", action="store_true", help="store metadata only")
     sync_parser.add_argument(
         "--once",

@@ -192,6 +192,10 @@ class SyncState(Base, TimestampMixin):
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Gmail page token, so an interrupted initial sync resumes where it stopped.
     initial_sync_page_token: Mapped[str | None] = mapped_column(Text)
+    # The start date the current full pass walks from.  Kept so that moving the
+    # mailbox's start date earlier is noticed: the completed pass covers only
+    # what it was asked for, and older mail needs a fresh walk.
+    initial_sync_start_date: Mapped[date | None] = mapped_column(Date)
     total_messages_synced: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     account: Mapped[MailboxAccount] = relationship(back_populates="sync_state")

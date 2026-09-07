@@ -43,6 +43,29 @@ log = get_logger(__name__)
 DEFAULT_QUERY_FILTER = "-in:chats"
 
 
+def needs_full_pass(state: SyncState | None, start_date: date) -> bool:
+    """True when the mailbox owes a date-bounded walk rather than a history hop.
+
+    A completed pass covers only the date it was asked for.  Moving the start
+    date earlier therefore means older mail that nobody has ever fetched, and
+    the walk has to run again — the ingest layer is idempotent, so re-walking
+    costs time, never correctness.
+
+    Silently going incremental in that case is the bug this exists to prevent:
+    the operator asks for older mail, the sync reports success, and not one
+    older message arrives.
+    """
+    if state is None:
+        return True
+    if state.initial_sync_completed_at is None or state.last_history_id is None:
+        return True
+    if state.initial_sync_page_token:
+        # A walk is under way and unfinished; finish it before hopping history.
+        return True
+    covered = state.initial_sync_start_date
+    return covered is not None and start_date < covered
+
+
 @dataclass
 class SyncStats:
     messages_seen: int = 0
@@ -109,13 +132,21 @@ class SyncEngine:
     def sync(self) -> SyncRun:
         """Run whichever mode is appropriate for the mailbox's current state."""
         state = self._get_or_create_state()
-        if state.initial_sync_completed_at is None or state.last_history_id is None:
+        if needs_full_pass(state, self.start_date):
             return self.initial_sync()
         return self.incremental_sync()
 
     def initial_sync(self) -> SyncRun:
         state = self._get_or_create_state()
-        run = self._start_run(SyncKind.INITIAL, start_history_id=state.last_history_id)
+        # A pass that has already finished tells us this walk is a backfill:
+        # older mail behind a mailbox that was otherwise up to date.
+        kind = SyncKind.BACKFILL if state.initial_sync_completed_at else SyncKind.INITIAL
+        if state.initial_sync_start_date != self.start_date:
+            # The checkpoint belongs to a walk from a different date.
+            state.initial_sync_page_token = None
+            state.initial_sync_start_date = self.start_date
+            self.session.flush()
+        run = self._start_run(kind, start_history_id=state.last_history_id)
         stats = SyncStats()
 
         try:

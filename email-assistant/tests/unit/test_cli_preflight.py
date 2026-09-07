@@ -108,8 +108,8 @@ class TestSyncLoop:
     def _record_passes(self, monkeypatch, outcomes):
         calls = []
 
-        def fake_pass(_args):
-            calls.append(1)
+        def fake_pass(_args, announce=False):
+            calls.append(announce)
             return outcomes[len(calls) - 1]
 
         monkeypatch.setattr(cli, "_sync_once", fake_pass)
