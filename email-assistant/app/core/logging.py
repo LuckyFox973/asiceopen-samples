@@ -64,7 +64,9 @@ def configure_logging() -> None:
 # real mailbox printed "invalid pdf header" forty times in a row, which reads
 # as a fault and is not one — every outcome is recorded on the document row
 # and reported by `extract --problems`.  Errors still come through.
-NOISY_LIBRARIES = ("pypdf", "openpyxl")
+# googleapiclient warns once per retried attempt; we do our own backoff and
+# report it ourselves, so its copy is the same event told twice.
+NOISY_LIBRARIES = ("pypdf", "openpyxl", "googleapiclient.http")
 
 
 def _quieten_parser_libraries(level: int) -> None:

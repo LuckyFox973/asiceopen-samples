@@ -14,7 +14,7 @@ from app.core.crypto import get_cipher
 from app.core.logging import get_logger
 from app.db.models import MailboxAccount, SyncRun
 from app.gmail.actions import GmailActions
-from app.gmail.client import GmailClient
+from app.gmail.client import GmailClient, QuotaPacer
 from app.gmail.oauth import credentials_from_stored, refresh_if_needed
 from app.services.accounts import refresh_send_as_addresses
 from app.services.storage import build_storage
@@ -50,7 +50,11 @@ def build_client(
     session: Session, account: MailboxAccount, settings: Settings | None = None
 ) -> GmailClient:
     """Build an authenticated Gmail client, refreshing the token if needed."""
-    return GmailClient(build_credentials(session, account, settings))
+    settings = settings or get_settings()
+    return GmailClient(
+        build_credentials(session, account, settings),
+        pacer=QuotaPacer(settings.gmail_quota_units_per_second),
+    )
 
 
 def build_actions(

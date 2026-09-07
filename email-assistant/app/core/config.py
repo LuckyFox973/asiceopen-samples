@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     # --- Sync --------------------------------------------------------------
     sync_start_date: date = date(2026, 9, 1)
     sync_page_size: int = Field(default=100, ge=1, le=500)
+    # Gmail allows 250 quota units per second per mailbox; stay under it rather
+    # than discover the ceiling one 403 at a time.
+    gmail_quota_units_per_second: float = Field(default=200.0, gt=0, le=250)
     sync_max_messages_per_run: int = Field(default=2000, ge=1)
 
     # --- Attachments -------------------------------------------------------
