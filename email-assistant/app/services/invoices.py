@@ -65,6 +65,36 @@ SUPPLIER_LABELS = (
     r"issued\s+by",
     r"from",
 )
+# Who the invoice is *to*.  Never the answer to who issued it — and on an
+# invoice for one of my own companies, the wrong answer names me as the payee.
+CUSTOMER_LABELS = (
+    r"n[aá]zov\s+a\s+s[ií]dlo\s+[uú][cč]astn[ií]ka",
+    r"odberate[ľl]",
+    r"z[aá]kazn[ií]k",
+    r"kupuj[uú]ci",
+    r"faktura[cč]n[aá]\s+adresa",
+    r"bill\s+to",
+    r"customer",
+)
+
+# §3a of the Slovak Commercial Code makes a company print its own identity on
+# every business document: name, seat, IČO, and the register it is entered in.
+# So an invoice that never says "Dodávateľ" — Orange's does not — still names
+# its issuer in that footer, and the customer's address block does not carry
+# one: the customer is not the party declaring its register entry.
+LEGAL_FORM = (
+    r"a\.\s?s\.|s\.\s?r\.\s?o\.|spol\.\s+s\s+r\.\s?o\."
+    r"|k\.\s?s\.|v\.\s?o\.\s?s\.|n\.\s?o\.|o\.\s?z\.|SE"
+)
+REGISTER_FOOTER = re.compile(
+    rf"(?:^|\n)[ \t]*([^\n]{{3,90}}?\b(?:{LEGAL_FORM}))"
+    # The rest of the name's line, then at most one line break before the
+    # register clause — the footer is one run, wrapped by the PDF, not prose.
+    rf"[^\n]{{0,400}}\n?[^\n]{{0,400}}?"
+    rf"zap[ií]san[áýa]?\s+v\s+[Oo]bchodnom\s+registri",
+    re.IGNORECASE,
+)
+
 # 1 234,56 · 1.234,56 · 1,234.56 · 47.90
 MONEY = r"(-?\d[\d\s., ]*\d|\d)"
 CURRENCY = r"(EUR|€|CZK|K[čc]|USD|\$)"
@@ -199,6 +229,21 @@ def _currency(raw: str | None) -> str | None:
     return {"€": "EUR", "$": "USD", "KČ": "CZK", "KC": "CZK"}.get(symbol, symbol)
 
 
+def _key(name: str) -> str:
+    """Compare names by their letters, so "s. r. o" and "s. r. o." are one."""
+    return re.sub(r"[^0-9a-zà-ž]+", "", name.casefold())
+
+
+def _customer_names(text: str) -> set[str]:
+    names = set()
+    for label in CUSTOMER_LABELS:
+        for match in re.finditer(rf"{label}\s*:?\s*\n?[ \t]*([^\n]{{3,80}})", text, re.I):
+            name = _tidy_company(match.group(1))
+            if name:
+                names.add(_key(name))
+    return names
+
+
 def find_supplier(text: str) -> str | None:
     """The company that issued the invoice, as the document names it."""
     for label in SUPPLIER_LABELS:
@@ -207,6 +252,13 @@ def find_supplier(text: str) -> str | None:
             name = _tidy_company(match.group(1))
             if name:
                 return name
+
+    # Nothing labelled itself the supplier; fall back to the statutory footer.
+    customers = _customer_names(text)
+    for match in REGISTER_FOOTER.finditer(text):
+        name = _tidy_company(match.group(1))
+        if name and _key(name) not in customers:
+            return name
     return None
 
 
