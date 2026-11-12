@@ -60,3 +60,5 @@ struct SplitMix64: RandomNumberGenerator {
         return z ^ (z >> 31)
     }
 }
+
+@inline(__always) func sstep(_ a: Float, _ b: Float, _ x: Float) -> Float { smooth(clamp01((x - a) / (b - a))) }

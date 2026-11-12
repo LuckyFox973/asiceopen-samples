@@ -1,19 +1,36 @@
 # Krajinka (macOS) – prototyp
 
 Živá tapeta pre macOS. Prečíta, kde ležia ikony na ploche, a nechá okolo nich
-vyrásť krajinu: ostrovy v mori, lúku s jazierkami alebo zasneženú tajgu.
-Ikony vždy stoja na pokojnej čistinke. Stromy, palmy a kamene sa im vyhýbajú.
+vyrásť krajinu: tropické ostrovy, lúku s jazierkami alebo zasneženú tajgu.
+Každá ikona stojí na vlastnej čistinke, medzi ikonami vedú chodníky a cez vodu
+drevené mostíky. Stromy, palmy a kamene sa ikonám aj chodníkom vyhýbajú.
 
-![Ultrawide 5120×1440 – Pláž](docs/ultrawide-beach.png)
+![Pláž – detail](docs/crop-beach.jpg)
 
-| Lúka | Zima | MacBook (Pláž) |
-|---|---|---|
-| ![](docs/ultrawide-meadow.png) | ![](docs/ultrawide-winter.png) | ![](docs/macbook-beach.png) |
+| Lúka | Zima |
+|---|---|
+| ![](docs/crop-meadow.jpg) | ![](docs/crop-winter.jpg) |
 
-> Náhľady vyrenderoval `tools/terrain_preview.py`. Je to verný prepis algoritmu
-> terénu do Pythonu, slúži na ladenie tém bez Macu. Modré štvorce simulujú
-> ikony. V aplikácii sú navyše animácie: pena pri brehu, iskry na vode,
-> tiene oblakov a sneženie.
+Ultrawide 5120×1440:
+
+![Ultrawide – Pláž](docs/ultrawide-beach.jpg)
+![Ultrawide – Lúka](docs/ultrawide-meadow.jpg)
+![Ultrawide – Zima](docs/ultrawide-winter.jpg)
+
+> Náhľady vyrenderoval `tools/terrain_preview.py`. Je to verný prepis
+> renderu do Pythonu (numpy + cairo), slúži na ladenie tém bez Macu. Modré
+> štvorce simulujú ikony.
+
+### Čo sa hýbe
+
+| | Pláž | Lúka | Zima |
+|---|---|---|---|
+| Vlny bežiace k brehu, pena pri brehu | ✔ | jemné vlnky | – (ľad) |
+| Iskry a záblesky slnka na vode | ✔ | ✔ | trblietky na snehu |
+| Oblaky (tieň na zemi + biely závoj) | ✔ | ✔ | ✔ |
+| Kŕdle vtákov s tieňom | čajky | spevavce | vrany |
+| Na vode | plachetnice s brázdou | kačka s káčatkami | – |
+| Ďalšie | – | motýle | sneženie v dvoch hĺbkach |
 
 ## Požiadavky
 
@@ -47,12 +64,13 @@ spúšťanie pri prihlásení, diagnostika a ukončenie.
 | `KrajinkaApp.swift` | vstupný bod, aplikácia len v menu bare (`.accessory`) |
 | `AppDelegate.swift` | správa monitorov, rozdeľovanie ikon, pozastavovanie, menu |
 | `ScreenScene.swift` | `DesktopWindow` (okno na úrovni tapety) a scéna jednej obrazovky s renderom na pozadí |
-| `SceneView.swift` | strom vrstiev Core Animation: terén, voda, pena, oblaky, sneh |
+| `SceneView.swift` | strom vrstiev Core Animation: vlny, hladina, lodičky, oblaky, vtáky, motýle, sneh |
 | `Terrain.swift` | výškové pole (šum + vplyv ikon), pixelový render a masky |
-| `Decorator.swift` | rozmiestnenie a kreslenie dekorácií mimo ikon |
+| `Paths.swift` | chodníky medzi ikonami (minimálna kostra), mosty cez vodu |
+| `Decorator.swift` | rozmiestnenie a kreslenie flóry a drobností mimo ikon a chodníkov |
 | `Theme.swift` | palety a pravidlá tém (Pláž, Lúka, Zima) |
 | `DesktopIcons.swift` | čítanie polôh ikon z Findera (Accessibility API) a polling |
-| `SceneAssets.swift` | generované bitmapy (iskry, tieň oblaku, vločka) |
+| `SceneAssets.swift` | kódom generované sprity: oblaky, vtáky, plachetnica, kačky, motýle, vločky |
 
 **Ako to funguje:**
 1. **Okno pod ikonami.** Na každom monitore je bezrámové okno na úrovni
@@ -64,20 +82,33 @@ spúšťanie pri prihlásení, diagnostika a ukončenie.
 3. **Terén.** Výškové pole v mriežke 6 bodov má tri zložky:
    - fBm šum,
    - „kopčeky“ okolo ikon,
-   - garanciu čistinky pod každou ikonou.
+   - garanciu ostrova a tesnej čistinky pod každou ikonou.
 
-   Pixely sa počítajú bilineárne, takže pobrežie je hladké v každom rozlíšení.
-4. **Plynulá zmena.** Keď sa ikony zmenia, nový obraz sa vypočíta na pozadí
+   Z poľa sa počíta **vzdialenosť od pobrežia v bodoch** (signed distance
+   field: subpixelové semienka + chamfer). Vďaka nej majú pláže, plytčiny,
+   podvodný prah, biely lem aj vlny rovnakú šírku okolo každého ostrova.
+   Reliéf je tieňovaný svetlom zhora zľava. Na snehu sú tiene modrasté.
+   Pridaná je jemná vinetácia podľa pomeru strán a zrno.
+4. **Chodníky a flóra.** Ikony spája minimálna kostra chodníkov. Úseky cez
+   vodu sú drevené mostíky s doskami a zábradlím. Flóra rastie v hájoch podľa
+   šumu, mäkké tiene padajú doprava dole a všetko sa vyhýba ikonám
+   aj chodníkom.
+5. **Plynulá zmena.** Keď sa ikony zmenia, nový obraz sa vypočíta na pozadí
    a prelína sa so starým 0,9 s. Dekorácie sú deterministické podľa mriežky,
-   takže stromy „neskáču“. Len pribúdajú alebo miznú.
-5. **Animácie.** Všetko pohyblivé beží v Core Animation (GPU):
-   - pulzujúca pena,
-   - dve posúvajúce sa mriežky iskier (`CAReplicatorLayer`),
-   - tiene oblakov,
-   - sneh (`CAEmitterLayer`).
+   takže stromy „neskáču“. Len pribúdajú alebo miznú. Lodičky a kačky
+   zostávajú na mieste, kým je tam voda.
+6. **Animácie.** Všetko pohyblivé beží v Core Animation (GPU):
+   - vlny: štyri prstencové masky v hĺbke 6, 12, 19 a 27 bodov sa
+     rozsvecujú postupne zvonka dnu, potom sa spení breh,
+   - iskry na hladine (`CAReplicatorLayer`) a záblesky slnka (`CAEmitterLayer`),
+   - oblaky s tieňom,
+   - kŕdle vtákov v tvare V s tieňom,
+   - plachetnice s brázdou alebo kačky s káčatkami (`rotationMode = .rotateAuto`),
+   - motýle na uzavretých Catmull-Rom dráhach,
+   - sneh v dvoch hĺbkach.
 
-   Snímková frekvencia je obmedzená na 15–24 fps.
-6. **Úspora.** Animácie sa zastavia, keď je okno zakryté
+   Snímková frekvencia je obmedzená na 15–30 fps.
+7. **Úspora.** Animácie sa zastavia, keď je okno zakryté
    (`occlusionState`), keď je aktívna aplikácia na celú obrazovku, keď
    obrazovky spia a v režime nízkej spotreby.
 
