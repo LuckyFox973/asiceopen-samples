@@ -86,7 +86,7 @@ enum Decorator {
         var ground: [Item] = []
 
         // Veľké prvky – mriežka 40 bodov, hustota podľa „hájového“ šumu
-        let g: CGFloat = 40
+        let g: CGFloat = 30
         for j in 0..<(Int(size.height / g) + 2) {
             for i in 0..<(Int(size.width / g) + 2) {
                 let ii = Int32(i), jj = Int32(j)
@@ -96,22 +96,22 @@ enum Decorator {
                 let sz = h(ii, jj, seed &+ 53)
                 let sid = Int32(h(ii, jj, seed &+ 61) * 1e6)
                 let sd = CGFloat(field.sdf(p))
-                let land = sd > 0 && field.clear(p) < 0.02
+                let land = sd > 0
                 let dens = CGFloat(sstep(0.38, 0.62, field.detail(p)))
                 let bw = CGFloat(t.beachWidth)
 
                 var kind: Kind?
                 switch t.id {
                 case .beach:
-                    if land && sd > bw + 6 && roll < 0.15 + 0.6 * dens {
+                    if land && sd > bw * 0.6 && roll < 0.35 + 0.5 * dens {
                         kind = roll < 0.1 + 0.45 * dens ? .palm : .bush
-                    } else if land && sd > bw + 3 && roll < 0.2 {
+                    } else if land && sd > 3 && roll < 0.5 {
                         kind = .bush
                     } else if sd > -40 && sd < -8 && roll < 0.05 {
                         kind = .rockInWater
                     }
                 case .meadow:
-                    if land && sd > 8 && roll < 0.1 + 0.7 * dens {
+                    if land && sd > 5 && roll < 0.35 + 0.5 * dens {
                         kind = roll < 0.05 + 0.55 * dens ? .tree : .bushFlowers
                     } else if sd > -30 && sd < -6 && roll < 0.12 {
                         kind = .lily
@@ -119,7 +119,7 @@ enum Decorator {
                         kind = .rock
                     }
                 case .winter:
-                    if land && sd > 6 && roll < 0.12 + 0.72 * dens {
+                    if land && sd > 4 && roll < 0.35 + 0.5 * dens {
                         kind = .pine
                     } else if land && roll < 0.16 + 0.72 * dens {
                         kind = .rockSnowy
@@ -127,7 +127,9 @@ enum Decorator {
                 }
                 guard let k = kind else { continue }
                 let s = k.baseSize * (0.8 + 0.45 * sz)
-                if blocked(p, s * 0.75 + 14) { continue }
+                // celý obrys (kmeň aj koruna) mimo rámikov ikon
+                let box = CGRect(x: p.x - s * 0.6, y: p.y - s * 0.3, width: s * 1.2, height: s * 1.45).insetBy(dx: -5, dy: -5)
+                if icons.contains(where: { $0.intersects(box) }) || blocked(p, 0) { continue }
                 items.append(Item(p: p, kind: k, s: s, seed: sid))
             }
         }
@@ -141,7 +143,6 @@ enum Decorator {
                                 y: (CGFloat(j) + 0.1 + 0.8 * h(ii, jj, seed &+ 83)) * gg)
                 let roll = h(ii, jj, seed &+ 97)
                 let sid = Int32(h(ii, jj, seed &+ 101) * 1e6)
-                if field.clear(p) > 0.05 { continue }
                 let sd = CGFloat(field.sdf(p))
                 let bw = CGFloat(t.beachWidth)
 
@@ -155,10 +156,10 @@ enum Decorator {
                     else if sd > 8 && roll < 0.16 { kind = .flowers }
                     else if sd > 8 && roll < 0.42 { kind = .tuft }
                 case .winter:
-                    if sd < -20 && roll < 0.03 { kind = .crack }
+                    if sd < -20 && roll < 0.012 { kind = .crack }
                 }
                 guard let k = kind else { continue }
-                if blocked(p, k == .crack ? 2 : 8) { continue }
+                if blocked(p, k == .crack ? 2 : 3) { continue }
                 ground.append(Item(p: p, kind: k, s: k.baseSize, seed: sid))
             }
         }

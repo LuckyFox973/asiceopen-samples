@@ -25,6 +25,7 @@ def fbm(x, y, seed, octaves):
 def rgb(h): return np.array([(h>>16)&255, (h>>8)&255, h&255], np.float32)/255
 
 SHORE, CLEAR = .42, .74
+ONLY_ICONS = True
 CELL = 6.0
 
 THEMES = {
@@ -58,17 +59,31 @@ THEMES = {
 def build_field(W, H, icons, th):
     cols = int(np.ceil(W/CELL))+2; rows = int(np.ceil(H/CELL))+2
     X, Y = np.meshgrid(np.arange(cols, dtype=np.float32)*CELL, np.arange(rows, dtype=np.float32)*CELL)
-    f = th['wl'] + (fbm(X/280, Y/280, th['seed'], 4)-.5)*.95
-    inf = np.zeros_like(f); minD = np.full_like(f, np.inf)
-    for (x0,y0,x1,y1) in icons:
-        dx = np.maximum(np.maximum(x0-X, 0), X-x1); dy = np.maximum(np.maximum(y0-Y, 0), Y-y1)
-        d = np.sqrt(dx*dx+dy*dy); minD = np.minimum(minD, d)
-        inf += np.where(d < 120, smooth(np.clip(1-d/120, 0, 1)), 0)
-    f += np.minimum(inf, 1.3)*.62
-    if icons: f = np.maximum(f, .86 - np.maximum(0, minD-8)/70)
-    # čistinka: tesne okolo ikony, okraj zvlnený šumom
-    cn = fbm(X/38, Y/38, th['seed']+555, 2)
-    clear = (1 - sstep(8, 22, minD + (cn-.5)*14)) if icons else np.zeros_like(f)
+    if ONLY_ICONS:
+        f = .16 + (fbm(X/140, Y/140, th['seed'], 3)-.5)*.34
+    else:
+        f = th['wl'] + (fbm(X/280, Y/280, th['seed'], 4)-.5)*.95
+    # e = vzdialenosť od pobrežia ostrova daného dokumentu (záporná = na ostrove)
+    e1 = np.full_like(f, np.inf); d1 = np.full_like(f, np.inf); d2 = np.full_like(f, np.inf)
+    wob = fbm(X/55, Y/55, th['seed']+555, 3)
+    for k, (x0,y0,x1,y1) in enumerate(icons):
+        cr = min(32, (x1-x0)/2, (y1-y0)/2)                          # zaoblené rohy
+        ox = (h1(k, 1, 901)-.5)*16; oy = (h1(k, 2, 901)-.5)*16      # ostrov mierne mimo stredu
+        dx = np.maximum(np.maximum(x0+cr+ox-X, 0), X-(x1-cr+ox)); dy = np.maximum(np.maximum(y0+cr+oy-Y, 0), Y-(y1-cr+oy))
+        dr = np.maximum(np.sqrt(dx*dx+dy*dy)-cr, 0)
+        dxx = np.maximum(np.maximum(x0-X, 0), X-x1); dyy = np.maximum(np.maximum(y0-Y, 0), Y-y1)
+        draw_ = np.sqrt(dxx*dxx+dyy*dyy); d2 = np.where(draw_ < d1, d1, np.minimum(d2, draw_)); d1 = np.minimum(d1, draw_)
+        R = 30 + 16*h1(k, 3, 901)                                   # každý ostrov inak veľký
+        e = dr - (R + (wob-.5)*30)
+        e1 = np.minimum(e1, e)
+    clear = np.zeros_like(f)
+    if icons:
+        isl = SHORE - e1*.012
+        sep = np.where(np.isfinite(d2), d2-d1, 1e9)                  # os medzi rámikmi susedov
+        isl = isl - .6*smooth(np.clip(1-sep/28, 0, 1))             # prieliv medzi susedmi
+        isl = np.maximum(isl, np.where(d1 < 2, SHORE+.05, -1))      # dokument nikdy nestojí vo vode
+        f = np.maximum(f, isl)
+        clear = (1 - sstep(0, 14, d1)).astype(np.float32)
     detail = fbm(X/90, Y/90, th['seed']+977, 2)
     micro = fbm(X/16, Y/16, th['seed']+313, 2)
     # gradient (na bod)
@@ -129,6 +144,7 @@ def shade_pixels(F, W, H, scale, th):
     t1 = 1-np.exp(-depth/45); t2 = 1-np.exp(-depth/230)
     wc = mix(C['shallow'], C['deep'], t1); wc = mix(wc, C['deepest'], t2*.85)
     wc = wc + ((m-.5)*.06*(1-t1))[..., None]                         # piesočné dno na plytčine
+    wc = wc + ((d-.5)*.05*t1)[..., None]                              # žíhanie hlbokej vody
     shelf = np.exp(-((depth-24)/3.2)**2)*.22                           # podvodný prah
     wc = mix(wc, C['shelf'], shelf)
     wc = mix(wc, np.broadcast_to(rgb(th['lip'][0]), wc.shape), np.clip(1-depth/2.6, 0, 1)*th['lip'][1])
@@ -137,11 +153,13 @@ def shade_pixels(F, W, H, scale, th):
     # pevnina
     inland = np.maximum(sdf, 0)
     patch = sstep(.36, .64, d)
-    lc = mix(C['land'], C['landAlt'], patch) + ((m-.5)*th['micro'])[..., None]
+    calm = bil(F['clear'], X, Y)
+    lc = mix(C['land'], C['landAlt'], patch*(1-.6*calm)) + ((m-.5)*th['micro']*(1-.6*calm))[..., None]
     sandc = mix(C['sand'], C['wetSand'], np.clip(1-inland/3.5, 0, 1)*.55) + ((m-.5)*.03)[..., None]
     lc = mix(sandc, lc, sstep(th['beachW']-2, th['beachW']+3, inland))
-    tc = sstep(.35, .65, bil(F['clear'], X, Y))
-    edge = np.exp(-((tc-.15)/.12)**2)*.35
+    calm = bil(F['clear'], X, Y)
+    tc = np.zeros_like(calm)
+    edge = np.zeros_like(calm)
     lc = mix(lc, C['clearingEdge'], edge*(1-tc))
     lc = mix(lc, C['clearing'] + ((d-.5)*.03)[..., None], tc)
     # tieňovanie reliéfu
@@ -398,30 +416,32 @@ def place(F, W, H, icons, segs, th, name):
         return False
     items, ground = [], []
     seed = th['seed']
-    g = 40
+    g = 30
     for j in range(int(H/g)+2):
         for i in range(int(W/g)+2):
             x = (i+.1+.8*h1(i, j, seed+11))*g; y = (j+.1+.8*h1(i, j, seed+23))*g
             roll = h1(i, j, seed+37); sz = h1(i, j, seed+53); sid = int(h1(i, j, seed+61)*1e6)
             cl = float(bil(F['clear'], x, y)); sd = float(bil(F['sdf'], x, y)); grove = float(bil(F['detail'], x, y))
-            land = sd > 0 and cl < .02; inland = sd
+            land = sd > 0; inland = sd
             dens = sstep(.38, .62, grove)
             kind = None
             if name == 'beach':
-                if land and inland > th['beachW']+6 and roll < .15+.6*dens: kind = 'palm' if roll < .1+.45*dens else 'bush'
-                elif land and inland > th['beachW']+3 and roll < .2: kind = 'bush'
+                if land and inland > th['beachW']*.6 and roll < .35+.5*dens: kind = 'palm' if roll < .1+.45*dens else 'bush'
+                elif land and inland > 3 and roll < .5: kind = 'bush'
                 elif -40 < sd < -8 and roll < .05: kind = 'rockw'
             elif name == 'meadow':
-                if land and inland > 8 and roll < .1+.7*dens: kind = 'tree' if roll < .05+.55*dens else 'bushf'
+                if land and inland > 5 and roll < .35+.5*dens: kind = 'tree' if roll < .05+.55*dens else 'bushf'
                 elif -30 < sd < -6 and roll < .12: kind = 'lily'
                 elif land and roll < .03: kind = 'rock'
             else:
-                if land and inland > 6 and roll < .12+.72*dens: kind = 'pine'
+                if land and inland > 4 and roll < .35+.5*dens: kind = 'pine'
                 elif land and roll < .16+.72*dens: kind = 'rocks'
             if not kind: continue
             base = dict(palm=32, tree=36, pine=32, bush=17, bushf=17, rock=14, rocks=15, rockw=13, lily=13)[kind]
             s = base*(.8+.45*sz)
-            if blocked(x, y, s*.75+14): continue
+            bx0, by0, bx1, by1 = x-s*.6-5, y-s*.3-5, x+s*.6+5, y+s*1.15+5
+            if any(not (bx1 < a0 or bx0 > a1 or by1 < b0 or by0 > b1) for (a0, b0, a1, b1) in icons): continue
+            if blocked(x, y, 0): continue
             items.append((x, y, kind, s, sid))
     g = 20
     for j in range(int(H/g)+2):
@@ -429,7 +449,6 @@ def place(F, W, H, icons, segs, th, name):
             x = (i+.1+.8*h1(i, j, seed+71))*g; y = (j+.1+.8*h1(i, j, seed+83))*g
             roll = h1(i, j, seed+97); sid = int(h1(i, j, seed+101)*1e6)
             cl = float(bil(F['clear'], x, y)); sd = float(bil(F['sdf'], x, y))
-            if cl > .05: continue
             kind = None
             if name == 'beach':
                 if 2 < sd < th['beachW']-3 and roll < .035: kind = 'star'
@@ -440,10 +459,10 @@ def place(F, W, H, icons, segs, th, name):
                 elif sd > 8 and roll < .16: kind = 'flowers'
                 elif sd > 8 and roll < .42: kind = 'tuft'
             else:
-                if sd < -20 and roll < .03: kind = 'crack'
+                if sd < -20 and roll < .012: kind = 'crack'
             if not kind: continue
             s = dict(star=6, tuft=6, reeds=12, flowers=7, crack=14)[kind]
-            if blocked(x, y, 8 if kind != 'crack' else 2): continue
+            if blocked(x, y, 3 if kind != 'crack' else 2): continue
             ground.append((x, y, kind, s, sid))
     return items, ground
 
@@ -512,8 +531,7 @@ def render(W, H, icons, name, scale, anim=True, phase=.55):
     arr[..., 2] = (col[..., 0]*255).astype(np.uint8); arr[..., 3] = 255
     surf = cairo.ImageSurface.create_for_data(memoryview(arr), cairo.FORMAT_ARGB32, w, h, w*4)
     p = Pen(surf, H, scale)
-    segs = plan_paths(F, icons, th)
-    draw_paths(p, segs, th)
+    segs = []
     items, ground = place(F, W, H, icons, segs, th, name)
     draw_decor(p, items, ground, th, name)
     if anim: draw_anim_frame(p, F, px, W, H, th, name, icons)
@@ -539,6 +557,14 @@ if __name__ == '__main__':
     for name in which:
         if name == 'mb':
             render(1512, 982, mac_icons(1512, 982, 5) + [(500, 300, 592, 408)], 'beach', 1.0).write_to_png(f'{out}/macbook-beach.png')
+        elif name.startswith('real'):
+            n = name.split('-')[1]; W, H = 2560, 1100; ic = []
+            def icon(x, y): return (x-6, y-135-6, x+95+6, y+6)
+            for i in range(4):
+                for j in range(2): ic.append(icon(20+i*131, H-10-j*218))
+            for (x, y) in [(900, 760), (1031, 760), (1600, 560), (2300, 980), (1350, 330)]:
+                ic.append(icon(x, y))
+            render(W, H, ic, n, .7).write_to_png(f'{out}/real-{n}.png')
         elif name.startswith('crop'):
             n = name.split('-')[1]; s = render(1800, 900, [(300, 380, 392, 488), (900, 520, 992, 628), (1300, 250, 1392, 358)], n, 1.5); s.write_to_png(f'{out}/crop-{n}.png')
         else:

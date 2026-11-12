@@ -5,13 +5,22 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private enum Keys {
         static let theme = "theme"
+        static let islandsEverywhere = "islandsEverywhere"
+        static let paths = "paths"
         static let paused = "paused"
     }
 
     private var scenes: [CGDirectDisplayID: ScreenScene] = [:]
     private let iconProvider = DesktopIconProvider()
     private var statusItem: NSStatusItem?
-    private var theme = Theme.named(ThemeID(rawValue: UserDefaults.standard.string(forKey: Keys.theme) ?? "") ?? .beach)
+    private var theme = AppDelegate.makeTheme(ThemeID(rawValue: UserDefaults.standard.string(forKey: Keys.theme) ?? "") ?? .beach)
+
+    private static func makeTheme(_ id: ThemeID) -> Theme {
+        var t = Theme.named(id)
+        t.landOnlyAtIcons = !UserDefaults.standard.bool(forKey: Keys.islandsEverywhere)
+        t.showPaths = UserDefaults.standard.bool(forKey: Keys.paths)
+        return t
+    }
     private var userPaused = UserDefaults.standard.bool(forKey: Keys.paused)
     private var screensAsleep = false
     private var globalIcons: [CGRect] = []
@@ -159,6 +168,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         themeItem.submenu = themeMenu
         menu.addItem(themeItem)
 
+        let paths = item("Chodníky medzi dokumentmi", #selector(togglePaths))
+        paths.state = theme.showPaths ? .on : .off
+        menu.addItem(paths)
+
+        let islands = item("Ostrovy aj mimo ikon", #selector(toggleIslands))
+        islands.state = theme.landOnlyAtIcons ? .off : .on
+        menu.addItem(islands)
+
         let pause = item("Pozastaviť animácie", #selector(togglePause))
         pause.state = userPaused ? .on : .off
         menu.addItem(pause)
@@ -183,8 +200,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func selectTheme(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let id = ThemeID(rawValue: raw) else { return }
-        theme = Theme.named(id)
         UserDefaults.standard.set(raw, forKey: Keys.theme)
+        theme = Self.makeTheme(id)
+        scenes.values.forEach { $0.setTheme(theme) }
+        updateActivity()
+    }
+
+    @objc private func togglePaths() {
+        UserDefaults.standard.set(!theme.showPaths, forKey: Keys.paths)
+        theme = Self.makeTheme(theme.id)
+        scenes.values.forEach { $0.setTheme(theme) }
+        updateActivity()
+    }
+
+    @objc private func toggleIslands() {
+        let everywhere = !UserDefaults.standard.bool(forKey: Keys.islandsEverywhere)
+        UserDefaults.standard.set(everywhere, forKey: Keys.islandsEverywhere)
+        theme = Self.makeTheme(theme.id)
         scenes.values.forEach { $0.setTheme(theme) }
         updateActivity()
     }

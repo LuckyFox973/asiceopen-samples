@@ -1,9 +1,20 @@
 # Krajinka (macOS) – prototyp
 
-Živá tapeta pre macOS. Prečíta, kde ležia ikony na ploche, a nechá okolo nich
-vyrásť krajinu: tropické ostrovy, lúku s jazierkami alebo zasneženú tajgu.
-Každá ikona stojí na vlastnej čistinke, medzi ikonami vedú chodníky a cez vodu
-drevené mostíky. Stromy, palmy a kamene sa ikonám aj chodníkom vyhýbajú.
+Živá tapeta pre macOS. Prečíta, kde ležia ikony na ploche, a každému
+dokumentu vytvorí vlastný ostrov: piesok a palmy, lúku so stromami alebo
+zasnežený ostrov so smrekmi. Mimo dokumentov je voda, takže plocha zostáva
+prehľadná. Susedné dokumenty oddeľuje úzky prieliv.
+
+![Ostrov pre každý dokument](docs/islands-beach.jpg)
+
+| Lúka | Zima |
+|---|---|
+| ![](docs/islands-meadow.jpg) | ![](docs/islands-winter.jpg) |
+
+V menu sa dá zapnúť:
+- **Chodníky medzi dokumentmi** – cez prielivy vedú drevené mostíky.
+- **Ostrovy aj mimo ikon** – pôvodný režim s ostrovmi po celej ploche
+  (ukážky nižšie).
 
 ![Pláž – detail](docs/crop-beach.jpg)
 

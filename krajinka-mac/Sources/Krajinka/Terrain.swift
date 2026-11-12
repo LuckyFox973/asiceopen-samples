@@ -55,7 +55,6 @@ struct TerrainField {
 
 enum TerrainRenderer {
     static let cell: Float = 6
-    static let iconReach: Float = 120
     /// Smer svetla (zhora zľava), normalizovaný.
     static let light: (x: Float, y: Float, z: Float) = {
         let v: (Float, Float, Float) = (-0.5, 0.6, 0.62)
@@ -77,32 +76,54 @@ enum TerrainRenderer {
         let clearNoise = ValueNoise(seed: theme.seed &+ 555)
         let rects = icons.map { (Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
         let hasIcons = !rects.isEmpty
+        // Každý dokument má vlastný ostrov: zaoblený obdĺžnik okolo rámika, mierne
+        // posunutý, inak veľký a so zvlneným pobrežím.
+        let islands: [(x0: Float, y0: Float, x1: Float, y1: Float, cr: Float, r: Float)] =
+            rects.enumerated().map { k, r in
+                let kk = Int32(k)
+                let ox = (hash2(kk, 1, 901) - 0.5) * 16, oy = (hash2(kk, 2, 901) - 0.5) * 16
+                let cr = min(32, (r.2 - r.0) / 2, (r.3 - r.1) / 2)
+                return (r.0 + cr + ox, r.1 + cr + oy, r.2 - cr + ox, r.3 - cr + oy, cr, 30 + 16 * hash2(kk, 3, 901))
+            }
 
         for j in 0..<rows {
             let py = Float(j) * cell
             for i in 0..<cols {
                 let px = Float(i) * cell
-                var f = theme.waterLevel + (noise.fbm(px / 280, py / 280, octaves: 4) - 0.5) * 0.95
-
-                var influence: Float = 0
-                var minD = Float.greatestFiniteMagnitude
-                for r in rects {
-                    let dx = max(r.0 - px, 0, px - r.2)
-                    let dy = max(r.1 - py, 0, py - r.3)
-                    let dist = (dx * dx + dy * dy).squareRoot()
-                    if dist < minD { minD = dist }
-                    if dist < iconReach { influence += smooth(1 - dist / iconReach) }
+                var f: Float
+                if theme.landOnlyAtIcons {
+                    // všade pod hladinou; zem vytvárajú len dokumenty
+                    f = 0.16 + (noise.fbm(px / 140, py / 140, octaves: 3) - 0.5) * 0.34
+                } else {
+                    f = theme.waterLevel + (noise.fbm(px / 280, py / 280, octaves: 4) - 0.5) * 0.95
                 }
-                f += min(influence, 1.3) * 0.62
 
                 var clear: Float = 0
                 if hasIcons {
-                    // ikona vždy stojí na ostrove…
-                    let boost: Float = 0.86 - max(0, minD - 8) / 70
-                    if boost > f { f = boost }
-                    // …a na tesnej čistinke so zvlneným okrajom
-                    let wobble = (clearNoise.fbm(px / 38, py / 38, octaves: 2) - 0.5) * 14
-                    clear = 1 - sstep(8, 22, minD + wobble)
+                    let wobble = (clearNoise.fbm(px / 55, py / 55, octaves: 3) - 0.5) * 30
+                    var e1 = Float.greatestFiniteMagnitude          // vzdialenosť od pobrežia najbližšieho ostrova
+                    var d1 = Float.greatestFiniteMagnitude          // vzdialenosť od najbližšieho rámika
+                    var d2 = Float.greatestFiniteMagnitude          // …a od druhého najbližšieho
+                    for (k, r) in rects.enumerated() {
+                        let dx = max(r.0 - px, 0, px - r.2)
+                        let dy = max(r.1 - py, 0, py - r.3)
+                        let d = (dx * dx + dy * dy).squareRoot()
+                        if d < d1 { d2 = d1; d1 = d } else if d < d2 { d2 = d }
+
+                        let isl = islands[k]
+                        let ix = max(isl.x0 - px, 0, px - isl.x1)
+                        let iy = max(isl.y0 - py, 0, py - isl.y1)
+                        let rounded = max((ix * ix + iy * iy).squareRoot() - isl.cr, 0)
+                        e1 = min(e1, rounded - (isl.r + wobble))
+                    }
+                    var island = Band.shore - e1 * 0.012                  // kupola, najvyššie pod ikonou
+                    if d2 < .greatestFiniteMagnitude {
+                        // prieliv pozdĺž osi medzi dvoma susednými dokumentmi
+                        island -= 0.6 * smooth(clamp01(1 - (d2 - d1) / 28))
+                    }
+                    if d1 < 2 { island = max(island, Band.shore + 0.05) }  // dokument nikdy nestojí vo vode
+                    f = max(f, island)
+                    clear = 1 - sstep(0, 14, d1)
                 }
 
                 let k = (j * cols + i) * S
@@ -199,7 +220,7 @@ enum TerrainRenderer {
         // Chodníky, mosty a flóra – vektorovo v bodoch
         terrainCtx.saveGState()
         terrainCtx.scaleBy(x: scale, y: scale)
-        let paths = PathPlanner.plan(field: field, icons: icons)
+        let paths = theme.showPaths ? PathPlanner.plan(field: field, icons: icons) : []
         Decorator.drawPaths(paths, in: terrainCtx, theme: theme)
         Decorator.draw(in: terrainCtx, size: size, field: field, icons: icons, paths: paths, theme: theme)
         terrainCtx.restoreGState()
@@ -270,6 +291,7 @@ enum TerrainRenderer {
                     let t2 = 1 - expf(-depth / 230)
                     var wc = t.shallow.mix(t.deep, t1).mix(t.deepest, t2 * 0.85)
                     wc = wc.offset((m - 0.5) * 0.06 * (1 - t1))
+                    wc = wc.offset((det - 0.5) * 0.05 * t1)          // jemné žíhanie hlbokej vody
                     let sd = (depth - 24) / 3.2
                     wc = wc.mix(t.shelf, expf(-sd * sd) * 0.22)
                     wc = wc.mix(t.lip, clamp01(1 - depth / 2.6) * t.lipAlpha)
@@ -280,20 +302,18 @@ enum TerrainRenderer {
                     let landA = clamp01(sdf / 0.6 + 0.5)
                     if landA > 0 {
                         let inland = max(sdf, 0)
-                        var lc = t.land.mix(t.landAlt, sstep(0.36, 0.64, det)).offset((m - 0.5) * t.microAmount)
+                        // pod ikonou sa textúra utlmí, farba ostáva – žiadne „vyrezané“ plochy
+                        let calm = 1 - 0.6 * ch(TerrainField.clear)
+                        var lc = t.land.mix(t.landAlt, sstep(0.36, 0.64, det) * calm).offset((m - 0.5) * t.microAmount * calm)
                         let sandc = t.sand.mix(t.wetSand, clamp01(1 - inland / 3.5) * 0.55).offset((m - 0.5) * 0.03)
                         lc = sandc.mix(lc, sstep(bw - 2, bw + 3, inland))
 
-                        let tc = sstep(0.35, 0.65, ch(TerrainField.clear))
-                        let e = (tc - 0.15) / 0.12
-                        lc = lc.mix(t.clearingEdge, expf(-e * e) * 0.35 * (1 - tc))
-                        lc = lc.mix(t.clearing.offset((det - 0.5) * 0.03), tc)
 
                         // tieňovanie reliéfu
                         let nx = -ch(TerrainField.gradX) * 22, ny = -ch(TerrainField.gradY) * 22
                         let nl = (nx * nx + ny * ny + 1).squareRoot()
                         var sh = (nx * L.x + ny * L.y + L.z) / nl - L.z
-                        sh = min(max(sh * t.shadeStrength, -0.35), 0.35) * (1 - tc * 0.75)
+                        sh = min(max(sh * t.shadeStrength, -0.35), 0.35)
                         if sh > 0 {
                             lc = lc.scaled(1 + sh * 1.1)
                         } else {

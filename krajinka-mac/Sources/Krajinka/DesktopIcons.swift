@@ -29,9 +29,8 @@ enum FinderDesktopReader {
             .map { ax in
                 // AX: počiatok vľavo hore, os y dole → Cocoa: vľavo dole, os y hore
                 let cocoa = CGRect(x: ax.minX, y: primaryHeight - ax.maxY, width: ax.width, height: ax.height)
-                // rezerva na popisok pod ikonou (ak ho AX rámček nezahŕňa, nevadí ani tak)
-                return CGRect(x: cocoa.minX - 14, y: cocoa.minY - 36,
-                              width: cocoa.width + 28, height: cocoa.height + 44).integral
+                // AX rámik zahŕňa ikonu aj popisok – stačí malá rezerva
+                return cocoa.insetBy(dx: -6, dy: -6).integral
             }
             .sorted { ($0.minX, $0.minY) < ($1.minX, $1.minY) }
     }

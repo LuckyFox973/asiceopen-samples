@@ -52,6 +52,11 @@ struct Theme {
     var seed: UInt32 = 1
     /// Nižšia hodnota = viac vody mimo ikon.
     var waterLevel: Float = 0.30
+    /// true = pevnina len okolo ikon, inde voda (prehľadnejšie);
+    /// false = náhodné ostrovy aj mimo ikon.
+    var landOnlyAtIcons = true
+    /// Chodníky (a mostíky) medzi dokumentmi.
+    var showPaths = false
 
     // Voda (hĺbka sa počíta v bodoch od pobrežia)
     var deepest = RGB(0x0B3A68)
