@@ -19,5 +19,13 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 # ad-hoc builde si macOS pýta povolenie Accessibility nanovo (iný podpis).
 codesign --force --sign "${SIGN_IDENTITY:--}" "$APP"
 
+# Nový ad-hoc podpis = pre macOS iná aplikácia. Staré povolenie Prístupnosť
+# by v nastaveniach svietilo, ale neplatilo – preto ho zrušíme a macOS sa
+# pri štarte opýta nanovo (stačí zapnúť prepínač pri Krajinke).
+if [ -z "${SIGN_IDENTITY:-}" ]; then
+  pkill -x Krajinka >/dev/null 2>&1 || true
+  tccutil reset Accessibility app.krajinka.mac >/dev/null 2>&1 || true
+fi
+
 echo "Hotovo: $APP"
 echo "Spustenie: open \"$APP\""

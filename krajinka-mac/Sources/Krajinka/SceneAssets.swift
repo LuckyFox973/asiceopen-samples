@@ -69,22 +69,50 @@ enum SceneAssets {
 
     static let cloudSize = CGSize(width: 560, height: 300)
 
-    private static func cloud(color: UInt32, alpha: CGFloat, seed: UInt64) -> CGImage {
-        image(cloudSize, scale: 1) { ctx in
-            var rng = SplitMix64(seed: seed)
-            for _ in 0..<11 {
-                let p = CGPoint(x: CGFloat.random(in: 150...410, using: &rng),
-                                y: CGFloat.random(in: 115...185, using: &rng))
-                let r = CGFloat.random(in: 55...105, using: &rng)
-                radial(ctx, p, r, c(color, alpha), c(color, 0), mid: 0.15)
-            }
+    /// Kopy kopovitého oblaku: v strede vyššie a väčšie, na krajoch menšie.
+    private static func cloudPuffs(seed: UInt64) -> [(CGPoint, CGFloat)] {
+        var rng = SplitMix64(seed: seed)
+        var out: [(CGPoint, CGFloat)] = []
+        let n = 14
+        for i in 0..<n {
+            let t = CGFloat(i) / CGFloat(n - 1)
+            let bell = sin(t * .pi)
+            let x = 90 + t * 380 + CGFloat.random(in: -18...18, using: &rng)
+            let r = 34 + 46 * bell * CGFloat.random(in: 0.75...1.1, using: &rng)
+            let y = 120 + bell * 45 + CGFloat.random(in: -12...14, using: &rng)
+            out.append((CGPoint(x: x, y: y), r))
+        }
+        for _ in 0..<6 {
+            out.append((CGPoint(x: CGFloat.random(in: 180...380, using: &rng),
+                                y: 175 + CGFloat.random(in: -10...20, using: &rng)),
+                        CGFloat.random(in: 38...60, using: &rng)))
+        }
+        return out
+    }
+
+    private static func drawPuffs(_ ctx: CGContext, _ puffs: [(CGPoint, CGFloat)], _ color: UInt32, _ alpha: CGFloat,
+                                  shift: CGPoint = .zero, k: CGFloat = 1) {
+        let g = CGGradient(colorsSpace: colorSpace,
+                           colors: [c(color, alpha), c(color, alpha * 0.9), c(color, 0)] as CFArray,
+                           locations: [0, 0.55, 1])!
+        for (p, r) in puffs {
+            let q = CGPoint(x: p.x + shift.x, y: p.y + shift.y)
+            ctx.drawRadialGradient(g, startCenter: q, startRadius: 0, endCenter: q, endRadius: r * k, options: [])
         }
     }
 
-    /// Mäkký tieň oblaku na zemi.
-    static let cloudShadow = cloud(color: 0x000000, alpha: 0.5, seed: 42)
-    /// Samotný oblak – tenký biely závoj nad krajinou.
-    static let cloudWhite = cloud(color: 0xFFFFFF, alpha: 0.6, seed: 42)
+    /// Tri tvary oblakov. Tieň a oblak majú rovnaké kopy, takže tieň „sedí“.
+    static let clouds: [(shadow: CGImage, white: CGImage)] = ([42, 7, 99] as [UInt64]).map { seed in
+        let puffs = cloudPuffs(seed: seed)
+        let shadow = image(cloudSize, scale: 1) { ctx in
+            drawPuffs(ctx, puffs, 0x000000, 0.14)
+        }
+        let white = image(cloudSize, scale: 1) { ctx in
+            drawPuffs(ctx, puffs, 0xCCDBEB, 0.45)                                   // tienistý spodok
+            drawPuffs(ctx, puffs, 0xFFFFFF, 0.475, shift: CGPoint(x: -6, y: 7), k: 0.9) // osvetlený vršok
+        }
+        return (shadow, white)
+    }
 
     // MARK: - Sneh
 

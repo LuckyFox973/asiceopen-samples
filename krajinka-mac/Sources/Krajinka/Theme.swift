@@ -97,8 +97,8 @@ struct Theme {
     var shimmerOpacity: Float = 0.35
     var waterGlints: Float = 1.0       // relatívna hustota zábleskov na vode
     var snowGlints: Float = 0
-    var cloudShadowOpacity: Float = 0.16
-    var cloudWhiteOpacity: Float = 0.22
+    var cloudShadowOpacity: Float = 1.0    // násobí priehľadnosť zapečenú v sprite
+    var cloudWhiteOpacity: Float = 0.85
     var snowfall = false
     var swimmers: Swimmers = .sailboats
     var birds: Birds = .gulls
@@ -123,7 +123,7 @@ struct Theme {
             t.flowers = [RGB(0xFFFFFF), RGB(0xF7D046), RGB(0xE86A92), RGB(0xB58CE0)]
             t.waveStrength = 0.28; t.wavePeriod = 7.0; t.waveColor = RGB(0xE4F2EA)
             t.shimmerOpacity = 0.22; t.waterGlints = 0.5
-            t.cloudShadowOpacity = 0.16; t.cloudWhiteOpacity = 0.18
+            t.cloudShadowOpacity = 1.0; t.cloudWhiteOpacity = 0.75
             t.swimmers = .ducks; t.birds = .songbirds; t.butterflies = true
         case .winter:
             t.id = .winter; t.seed = 3; t.waterLevel = 0.46
@@ -139,7 +139,7 @@ struct Theme {
             t.rock = RGB(0x6B7684); t.rockLight = RGB(0xA4AFBC); t.accent = RGB(0xFFFFFF)
             t.flowers = []
             t.waveStrength = 0; t.shimmerOpacity = 0; t.waterGlints = 0; t.snowGlints = 1.0
-            t.cloudShadowOpacity = 0.10; t.cloudWhiteOpacity = 0.25
+            t.cloudShadowOpacity = 0.65; t.cloudWhiteOpacity = 0.9
             t.snowfall = true; t.swimmers = .none; t.birds = .crows
         }
         return t

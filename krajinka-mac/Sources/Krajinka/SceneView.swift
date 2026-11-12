@@ -311,9 +311,10 @@ final class SceneView: NSView {
             let duration = CFTimeInterval((b.width + 2 * w + abs(lift.x)) / speed)
             let offset = Double(rand(0...1)) * duration
 
+            let variant = SceneAssets.clouds[Int(rand(0...2.99))]
             for (group, image, opacity, shift) in [
-                (cloudShadows, SceneAssets.cloudShadow, theme.cloudShadowOpacity, CGPoint.zero),
-                (cloudWhites, SceneAssets.cloudWhite, theme.cloudWhiteOpacity, lift),
+                (cloudShadows, variant.shadow, theme.cloudShadowOpacity, CGPoint.zero),
+                (cloudWhites, variant.white, theme.cloudWhiteOpacity, lift),
             ] {
                 guard opacity > 0 else { continue }
                 let l = CALayer()

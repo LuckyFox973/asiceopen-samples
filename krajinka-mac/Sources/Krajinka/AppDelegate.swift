@@ -6,7 +6,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private enum Keys {
         static let theme = "theme"
         static let paused = "paused"
-        static let askedTrust = "askedAccessibility"
     }
 
     private var scenes: [CGDirectDisplayID: ScreenScene] = [:]
@@ -27,8 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         rebuildScreens()
 
-        if !FinderDesktopReader.isTrusted && !UserDefaults.standard.bool(forKey: Keys.askedTrust) {
-            UserDefaults.standard.set(true, forKey: Keys.askedTrust)
+        // Bez povolenia Prístupnosť krajina ikony nevidí → systém sa opýta pri každom štarte,
+        // kým povolenie chýba (po novom builde staré povolenie neplatí).
+        if !FinderDesktopReader.isTrusted {
             FinderDesktopReader.requestTrust()
         }
 
@@ -144,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             info.isEnabled = false
             menu.addItem(info)
         } else {
-            menu.addItem(item("Povoliť prístup k ikonám…", #selector(openAccessibilitySettings)))
+            menu.addItem(item("⚠️ Krajinka nevidí ikony – povoliť Prístupnosť…", #selector(openAccessibilitySettings)))
         }
         menu.addItem(.separator())
 

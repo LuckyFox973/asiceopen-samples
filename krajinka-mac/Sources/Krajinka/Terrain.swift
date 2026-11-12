@@ -365,39 +365,51 @@ enum TerrainRenderer {
         return (images[0], images[1], Array(images[2...]))
     }
 
-    /// Miesta, kde sa zmestí kruh vody okolo – pre lodičky (Pláž) a kačky (Lúka).
+    /// Miesta pre lodičky (Pláž) a kačky (Lúka): obrazovka sa rozdelí na rovnako
+    /// široké pásy a v každom sa vyberie najotvorenejšia voda. Okraje (Dock dole,
+    /// menu bar hore, Dock po bokoch) sa vynechávajú.
     private static func findSwimSpots(field: TerrainField, size: CGSize, icons: [CGRect], theme: Theme) -> [CGPoint] {
-        let radius: Float
+        let radius: CGFloat
         switch theme.swimmers {
         case .none: return []
         case .sailboats: radius = 46
         case .ducks: radius = 30
         }
-        let maxCount = max(1, Int(size.width / 1700))
+        let count = max(1, Int(size.width / 1500))
+        let minX: CGFloat = 90, maxX = size.width - 90
+        let minY: CGFloat = 160, maxY = size.height - 80
+        guard maxX > minX, maxY > minY else { return [] }
+        let band = (maxX - minX) / CGFloat(count)
+        let step: CGFloat = 24
         var spots: [CGPoint] = []
-        let step: CGFloat = 36
-        var y = step * 2
-        outer: while y < size.height - step * 2 {
-            var x = step * 2
-            while x < size.width - step * 2 {
-                let p = CGPoint(x: x, y: y)
-                x += step
-                guard field.sdf(p) < -(radius + 16) else { continue }
-                if spots.contains(where: { hypot($0.x - p.x, $0.y - p.y) < 600 }) { continue }
-                if icons.contains(where: { $0.insetBy(dx: -160, dy: -160).contains(p) }) { continue }
-                // celá dráha (elipsa) aj s rezervou musí byť vo vode
-                var ok = true
-                for k in 0..<16 {
-                    let a = CGFloat(k) / 16 * 2 * .pi
-                    let q = CGPoint(x: p.x + cos(a) * CGFloat(radius), y: p.y + sin(a) * CGFloat(radius) * 0.65)
-                    if field.sdf(q) > -14 { ok = false; break }
+
+        for c in 0..<count {
+            var best: CGPoint?
+            var bestScore: Float = 0
+            var y = minY + radius
+            while y <= maxY - radius {
+                var x = minX + band * CGFloat(c) + radius
+                while x <= minX + band * CGFloat(c + 1) - radius {
+                    let p = CGPoint(x: x, y: y)
+                    x += step
+                    let center = field.sdf(p)
+                    guard center < -(Float(radius) + 16) else { continue }
+                    if icons.contains(where: { $0.insetBy(dx: -150, dy: -150).contains(p) }) { continue }
+                    // najmenšia vzdialenosť od brehu na celej dráhe = skóre
+                    var worst = -center
+                    for k in 0..<16 {
+                        let a = CGFloat(k) / 16 * 2 * .pi
+                        let q = CGPoint(x: p.x + cos(a) * radius, y: p.y + sin(a) * radius * 0.65)
+                        worst = min(worst, -field.sdf(q))
+                    }
+                    if worst > 14 && worst > bestScore {
+                        bestScore = worst
+                        best = p
+                    }
                 }
-                if ok {
-                    spots.append(p)
-                    if spots.count >= maxCount { break outer }
-                }
+                y += step
             }
-            y += step
+            if let b = best { spots.append(b) }
         }
         return spots
     }

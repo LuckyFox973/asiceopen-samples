@@ -7,7 +7,7 @@ import ApplicationServices
 /// Volá sa z vedľajšieho vlákna (AX volania môžu pri zaneprázdnenom Finderi čakať).
 enum FinderDesktopReader {
     static let finderBundleID = "com.apple.finder"
-    private static let iconRoles: Set<String> = ["AXImage"]
+    private static let iconRoles: Set<String> = ["AXImage", "AXGroup", "AXButton", "AXCell", "AXStaticText"]
 
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
@@ -36,27 +36,34 @@ enum FinderDesktopReader {
             .sorted { ($0.minX, $0.minY) < ($1.minX, $1.minY) }
     }
 
-    /// Plocha je vo Finderi priamy potomok aplikácie s rolou AXScrollArea
-    /// (okná Findera sú AXWindow, tie preskakujeme).
+    /// Plocha je vo Finderi priamy potomok aplikácie (typicky AXScrollArea).
+    /// Okná Findera (AXWindow) a menu bar preskakujeme.
     private static func desktopElements() -> [AXUIElement]? {
         guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: finderBundleID).first
         else { return nil }
         let app = AXUIElementCreateApplication(finder.processIdentifier)
         AXUIElementSetMessagingTimeout(app, 0.4)
-        return children(app).filter { role($0) == (kAXScrollAreaRole as String) }
+        let skip: Set<String> = [kAXWindowRole as String, kAXMenuBarRole as String]
+        return children(app).filter { !skip.contains(role($0) ?? "") }
     }
 
+    /// Rola prvkov ikon sa medzi verziami macOS líši (AXImage, AXGroup…), preto
+    /// berieme každý prvok s rámčekom „veľkosti ikony“ a ďalej doň nevnárame.
+    /// Veľké kontajnery (celá plocha) sa preliezajú hlbšie.
     private static func collectIcons(in element: AXUIElement, depth: Int, into frames: inout [CGRect]) {
         for child in children(element) {
             let r = role(child) ?? ""
-            if iconRoles.contains(r), let f = frame(child),
-               f.width >= 16, f.height >= 16, f.width <= 400, f.height <= 400 {
+            if let f = frame(child), f.width >= 16, f.height >= 16, f.width <= 400, f.height <= 400,
+               iconRoles.contains(r) || !ignoredRoles.contains(r) {
                 frames.append(f)
-            } else if depth < 3 {
+            } else if depth < 4 {
                 collectIcons(in: child, depth: depth + 1, into: &frames)
             }
         }
     }
+
+    /// Prvky, ktoré nie sú ikony, aj keď majú malý rámček.
+    private static let ignoredRoles: Set<String> = ["AXScrollBar", "AXValueIndicator", "AXMenu", "AXMenuItem"]
 
     // MARK: - Diagnostika (bez názvov súborov)
 
