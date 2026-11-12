@@ -1,17 +1,16 @@
 import CoreGraphics
 
-/// Budovy pre tému Mesto. Pohľad zhora s miernou perspektívou: strecha je
-/// posunutá nahor úmerne výške, takže vidno južnú stenu s oknami. Tiene padajú
-/// doprava dole. V centre (veľký šum) rastú sklenené mrakodrapy.
+/// Budovy pre tému Mesto v maľovanom štýle: tlmené strechy s jemným prechodom,
+/// mierna perspektíva (vidno južnú stenu), mäkké dvojité tiene, stromy pri uliciach.
 enum CityPainter {
-    private enum Kind { case glass, concrete, brick, dark, beige }
-
     private struct Building {
         let x0: CGFloat, y0: CGFloat, x1: CGFloat, y1: CGFloat
         let height: CGFloat
-        let seed: Int32
-        let kind: Kind
+        let roof: RGB
     }
+
+    private static let roofs: [RGB] = [RGB(0xC9C2B6), RGB(0xBFA48E), RGB(0xA9ADB3), RGB(0xD9CCB0), RGB(0xB8BEB0), RGB(0x9FB4C8)]
+    private static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
 
     @inline(__always)
     private static func h(_ a: Int32, _ b: Int32, _ salt: UInt32) -> CGFloat { CGFloat(hash2(a, b, salt)) }
@@ -21,132 +20,80 @@ enum CityPainter {
         var builds: [Building] = []
         for bj in 0...Int(size.height / bh) {
             for bi in 0...Int(size.width / bw) {
-                let x0 = CGFloat(bi) * bw + sw / 2 + 3, y0 = CGFloat(bj) * bh + sw / 2 + 3
-                let x1 = CGFloat(bi + 1) * bw - sw / 2 - 3, y1 = CGFloat(bj + 1) * bh - sw / 2 - 3
+                let x0 = CGFloat(bi) * bw + sw / 2 + 4, y0 = CGFloat(bj) * bh + sw / 2 + 4
+                let x1 = CGFloat(bi + 1) * bw - sw / 2 - 4, y1 = CGFloat(bj + 1) * bh - sw / 2 - 4
                 let ib = Int32(bi), jb = Int32(bj)
                 let nx = 1 + Int(h(ib, jb, 21) * 2.99), ny = 1 + Int(h(ib, jb, 22) * 1.99)
                 for a in 0..<nx {
                     for b in 0..<ny {
-                        let lx0 = x0 + (x1 - x0) * CGFloat(a) / CGFloat(nx) + 1.5
-                        let lx1 = x0 + (x1 - x0) * CGFloat(a + 1) / CGFloat(nx) - 1.5
-                        let ly0 = y0 + (y1 - y0) * CGFloat(b) / CGFloat(ny) + 1.5
-                        let ly1 = y0 + (y1 - y0) * CGFloat(b + 1) / CGFloat(ny) - 1.5
+                        let lx0 = x0 + (x1 - x0) * CGFloat(a) / CGFloat(nx) + 2
+                        let lx1 = x0 + (x1 - x0) * CGFloat(a + 1) / CGFloat(nx) - 2
+                        let ly0 = y0 + (y1 - y0) * CGFloat(b) / CGFloat(ny) + 2
+                        let ly1 = y0 + (y1 - y0) * CGFloat(b + 1) / CGFloat(ny) - 2
                         let ka = ib &* 7 &+ Int32(a), kb = jb &* 5 &+ Int32(b)
                         let sd = h(ka, kb, 31)
                         let downtown = field.large(CGPoint(x: (lx0 + lx1) / 2, y: (ly0 + ly1) / 2))
-                        let height = 8 + 30 * sd + 160 * CGFloat(sstep(0.5, 0.8, downtown)) * h(ka, kb, 32)
-                        let lift = height * 0.22
-                        let corners = [CGPoint(x: lx0, y: ly0), CGPoint(x: lx1, y: ly0),
-                                       CGPoint(x: lx0, y: ly1 + lift), CGPoint(x: lx1, y: ly1 + lift),
-                                       CGPoint(x: (lx0 + lx1) / 2, y: (ly0 + ly1) / 2)]
-                        if corners.contains(where: { field.sdf($0) > -8 }) { continue }   // nie do parku
-                        let kinds: [Kind] = [.concrete, .brick, .dark, .beige, .concrete]
-                        let kind: Kind = height > 90 ? .glass : kinds[Int(sd * 4.99)]
-                        builds.append(Building(x0: lx0, y0: ly0, x1: lx1, y1: ly1, height: height,
-                                               seed: Int32(sd * 1e5), kind: kind))
+                        let height = 8 + 26 * sd + 130 * CGFloat(sstep(0.52, 0.8, downtown)) * h(ka, kb, 32)
+                        let lift = height * 0.18
+                        let pts = [CGPoint(x: lx0, y: ly0), CGPoint(x: lx1, y: ly0), CGPoint(x: lx0, y: ly1 + lift),
+                                   CGPoint(x: lx1, y: ly1 + lift), CGPoint(x: (lx0 + lx1) / 2, y: (ly0 + ly1) / 2)]
+                        if pts.contains(where: { field.sdf($0) > -10 }) { continue }          // nie do parku
+                        let roof = height < 80 ? roofs[Int(sd * CGFloat(roofs.count)) % roofs.count] : RGB(0x8FAFCF)
+                        builds.append(Building(x0: lx0, y0: ly0, x1: lx1, y1: ly1, height: height, roof: roof))
                     }
                 }
             }
         }
 
-        // tiene
-        ctx.setFillColor(RGB.black.cg(0.22))
+        // mäkké tiene: dve priesvitné vrstvy rôznej dĺžky
         for b in builds {
-            let L = b.height * 0.35
-            ctx.beginPath()
-            ctx.addLines(between: [CGPoint(x: b.x0, y: b.y1), CGPoint(x: b.x1, y: b.y1),
-                                   CGPoint(x: b.x1 + L, y: b.y1 - L * 0.6), CGPoint(x: b.x1 + L, y: b.y0 - L * 0.6),
-                                   CGPoint(x: b.x0 + L, y: b.y0 - L * 0.6), CGPoint(x: b.x0, y: b.y0)])
-            ctx.closePath()
-            ctx.fillPath()
+            let L = b.height * 0.3
+            for (k, a) in [(CGFloat(1.0), CGFloat(0.10)), (0.6, 0.08)] {
+                ctx.setFillColor(RGB(0x2A3040).cg(a))
+                ctx.beginPath()
+                ctx.addLines(between: [CGPoint(x: b.x0, y: b.y1), CGPoint(x: b.x1, y: b.y1),
+                                       CGPoint(x: b.x1 + L * k, y: b.y1 - L * 0.6 * k), CGPoint(x: b.x1 + L * k, y: b.y0 - L * 0.6 * k),
+                                       CGPoint(x: b.x0 + L * k, y: b.y0 - L * 0.6 * k), CGPoint(x: b.x0, y: b.y0)])
+                ctx.closePath()
+                ctx.fillPath()
+            }
         }
-        // budovy od vzdialenejších (vyššie na obrazovke) po bližšie
-        for b in builds.sorted(by: { $0.y0 > $1.y0 }) {
-            drawBuilding(b, ctx)
-        }
-    }
+        for b in builds.sorted(by: { $0.y0 > $1.y0 }) { drawBuilding(b, ctx) }
 
-    private static func roofColor(_ k: Kind) -> RGB {
-        switch k {
-        case .glass: return RGB(0x6F9CC4)
-        case .concrete: return RGB(0xB9B6AE)
-        case .brick: return RGB(0xB0714F)
-        case .dark: return RGB(0x6B7078)
-        case .beige: return RGB(0xD8C9A8)
-        }
-    }
-
-    private static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-
-    private static func drawBuilding(_ b: Building, _ ctx: CGContext) {
-        let lift = b.height * 0.22
-        let rc = roofColor(b.kind)
-        let w = b.x1 - b.x0
-        // južná stena
-        ctx.setFillColor(rc.scaled(0.62).cg())
-        ctx.fill(CGRect(x: b.x0, y: b.y0, width: w, height: lift))
-        if lift > 6 {
-            ctx.setFillColor((b.kind == .glass ? RGB(0xBFD9F0) : RGB(0xF4E7B8)).cg(0.55))
-            let rows = Int(lift / 5), cols = max(1, Int(w / 5))
-            let cw = (w - 2.4) / CGFloat(cols)
-            for r in 0..<rows {
-                for k in 0..<cols where h(b.seed &+ Int32(r), Int32(k), 77) < 0.7 {
-                    ctx.fill(CGRect(x: b.x0 + 1.2 + CGFloat(k) * cw, y: b.y0 + 1.5 + CGFloat(r) * 5, width: cw * 0.55, height: 2.2))
+        // stromy pozdĺž ulíc
+        for bj in 0...(Int(size.height / bh) + 1) {
+            for bi in 0...(Int(size.width / bw) + 1) {
+                for k in 0..<6 where h(Int32(bi * 11 + k), Int32(bj), 51) < 0.55 {
+                    let horiz = k < 3
+                    let x = horiz ? CGFloat(bi) * bw + (h(Int32(bi), Int32(bj * 13 + k), 52) * 0.8 + 0.1) * bw
+                                  : CGFloat(bi) * bw + sw / 2 + 2.5
+                    let y = horiz ? CGFloat(bj) * bh + sw / 2 + 2.5
+                                  : CGFloat(bj) * bh + (h(Int32(bi * 3 + k), Int32(bj), 53) * 0.8 + 0.1) * bh
+                    let p = CGPoint(x: x, y: y)
+                    if field.sdf(p) > -8 { continue }
+                    Decorator.softTree(ctx, p, 4.2)
                 }
             }
         }
-        // strecha
-        let ry0 = b.y0 + lift, ry1 = b.y1 + lift
-        let roof = CGRect(x: b.x0, y: ry0, width: w, height: ry1 - ry0)
-        if b.kind == .glass {
-            let g = CGGradient(colorsSpace: colorSpace,
-                               colors: [rc.scaled(1.15).cg(), rc.cg(), rc.scaled(0.85).cg()] as CFArray,
-                               locations: [0, 0.5, 1])!
-            ctx.saveGState()
-            ctx.clip(to: roof)
-            ctx.drawLinearGradient(g, start: CGPoint(x: b.x0, y: ry1), end: CGPoint(x: b.x1, y: ry0), options: [])
-            ctx.restoreGState()
-        } else {
-            ctx.setFillColor(rc.cg())
-            ctx.fill(roof)
-        }
-        ctx.setStrokeColor(RGB.black.cg(0.12))
-        ctx.setLineWidth(0.8)
-        ctx.stroke(roof.insetBy(dx: 0.4, dy: 0.4))
+    }
 
-        let rh = ry1 - ry0
-        if b.kind != .glass && w > 14 && rh > 14 {                       // klimatizácie
-            for k in 0..<(Int(h(b.seed, 3, 3) * 3) + 1) {
-                let ax = b.x0 + 3 + h(b.seed, Int32(k), 4) * (w - 9)
-                let ay = ry0 + 3 + h(b.seed, Int32(k), 5) * (rh - 9)
-                ctx.setFillColor(RGB.black.cg(0.18))
-                ctx.fill(CGRect(x: ax + 1, y: ay - 1, width: 5, height: 4))
-                ctx.setFillColor(RGB(0xD9D9D6).cg())
-                ctx.fill(CGRect(x: ax, y: ay, width: 5, height: 4))
+    private static func drawBuilding(_ b: Building, _ ctx: CGContext) {
+        let lift = b.height * 0.18
+        let w = b.x1 - b.x0
+        ctx.setFillColor(b.roof.scaled(0.72).cg())
+        ctx.fill(CGRect(x: b.x0, y: b.y0, width: w, height: lift))              // južná stena
+        if lift > 7 {
+            ctx.setFillColor(RGB(0xF6F0DC).cg(0.28))
+            for r in 0..<Int(lift / 6) {
+                ctx.fill(CGRect(x: b.x0 + 1.5, y: b.y0 + 2 + CGFloat(r) * 6, width: w - 3, height: 1.6))
             }
         }
-        if b.height > 70 && w > 20 && rh > 20 && h(b.seed, 9, 9) < 0.5 {   // heliport
-            let c = CGPoint(x: b.x0 + w / 2, y: ry0 + rh / 2), r = min(w, rh) * 0.3
-            ctx.setFillColor(RGB(0x4B4F55).cg())
-            ctx.fillEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
-            ctx.setStrokeColor(RGB.white.cg())
-            ctx.setLineWidth(1)
-            ctx.beginPath()
-            ctx.move(to: CGPoint(x: c.x - 2.5, y: c.y - 3)); ctx.addLine(to: CGPoint(x: c.x - 2.5, y: c.y + 3))
-            ctx.move(to: CGPoint(x: c.x + 2.5, y: c.y - 3)); ctx.addLine(to: CGPoint(x: c.x + 2.5, y: c.y + 3))
-            ctx.move(to: CGPoint(x: c.x - 2.5, y: c.y)); ctx.addLine(to: CGPoint(x: c.x + 2.5, y: c.y))
-            ctx.strokePath()
-        }
-        if b.kind == .concrete && h(b.seed, 8, 8) < 0.25 && w > 16 && rh > 16 {   // strešná záhrada
-            ctx.setFillColor(RGB(0x7DB352).cg())
-            ctx.fill(CGRect(x: b.x0 + 3, y: ry0 + 3, width: w - 6, height: rh - 6))
-            for k in 0..<3 {
-                let p = CGPoint(x: b.x0 + 5 + h(b.seed, Int32(k), 11) * (w - 10), y: ry0 + 5 + h(b.seed, Int32(k), 12) * (rh - 10))
-                ctx.setFillColor(RGB(0x4A8C3A).cg())
-                ctx.fillEllipse(in: CGRect(x: p.x - 2.6, y: p.y - 2.6, width: 5.2, height: 5.2))
-                ctx.setFillColor(RGB(0x8CC860).cg())
-                ctx.fillEllipse(in: CGRect(x: p.x - 1.8, y: p.y - 0.4, width: 2, height: 2))
-            }
-        }
+        let roof = CGRect(x: b.x0, y: b.y0 + lift, width: w, height: b.y1 - b.y0)
+        let g = CGGradient(colorsSpace: colorSpace, colors: [b.roof.scaled(1.06).cg(), b.roof.scaled(0.95).cg()] as CFArray,
+                           locations: [0, 1])!
+        ctx.saveGState()
+        ctx.clip(to: roof)
+        ctx.drawLinearGradient(g, start: CGPoint(x: roof.minX, y: roof.maxY), end: CGPoint(x: roof.maxX, y: roof.minY), options: [])
+        ctx.restoreGState()
     }
 }

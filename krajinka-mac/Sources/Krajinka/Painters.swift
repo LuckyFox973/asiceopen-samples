@@ -1,230 +1,300 @@
 import Foundation
 
-/// Hodnoty poľa v jednom pixeli (body, os y hore).
-struct Sample {
-    var x: Float, y: Float, H: Float
-    var sdf: Float, calm: Float, detail: Float, micro: Float, large: Float
-    var gx: Float, gy: Float
-}
+/// Maľovaný štýl: mäkké mramorované plochy, ťahy štetca v tráve, bodky spŕšky,
+/// zrno papiera. Okolie (more, les, polia, mesto, zasnežený les) a povrch pod
+/// dokumentmi (piesok, ostrov, oblaky, pastvina, park, snehová pláň).
+struct Painters {
+    let theme: Theme
+    let field: TerrainField
+    private let s: UInt32
+    private let fiber = ValueNoise(seed: 77)
 
-/// Pixeloví „maliari“: okolie (more, les, polia, mesto, zasnežený les) a povrch
-/// pod dokumentmi (piesok, ostrov, oblaky, pastvina, park, sneh). 1:1 s
-/// tools/terrain_preview.py.
-enum Painters {
-    static func compose(_ s: inout Sample, theme t: Theme, field: TerrainField) -> RGB {
-        switch t.ground {
-        case .cloud:
-            var bg = backdrop(s, t, field)
-            // tieň oblakov na krajine (posunutý doprava dole)
-            let sx = s.x - 16, sy = s.y + 20
-            let shiftedSdf = field.value(TerrainField.sdf, sx, sy)
-            if shiftedSdf > -22 {
-                let shadow = cloudShape(sx, sy, shiftedSdf)
-                bg = bg.scaled(1 - 0.32 * sstep(-2, 6, shadow))
-            }
-            guard s.sdf > -22 else { return bg }
-            let cs = cloudShape(s.x, s.y, s.sdf)
-            let a = clamp01(cs / 0.8 + 0.5)
-            guard a > 0 else { return bg }
-            return bg.mix(cloudColor(s, cs), a)
-        default:
-            let a = clamp01(s.sdf / 0.6 + 0.5)
+    init(theme: Theme, field: TerrainField) {
+        self.theme = theme
+        self.field = field
+        self.s = theme.seed
+    }
+
+    // MARK: - Pomôcky
+
+    /// Krátky ťah štetca v každej bunke (tráva).
+    @inline(__always)
+    private func hatch(_ x: Float, _ y: Float, _ seed: UInt32, cw: Float = 8, chh: Float = 6, p: Float = 0.6,
+                       len: Float = 1.7, th: Float = 0.42, slant: Float = 0.18) -> Float {
+        let ci = (x / cw).rounded(.down), cj = (y / chh).rounded(.down)
+        let i = Int32(ci), j = Int32(cj)
+        guard hash2(i, j, seed &+ 3) < p else { return 0 }
+        let ox = (hash2(i, j, seed) * 0.6 + 0.2) * cw
+        let oy = (hash2(i, j, seed &+ 1) * 0.6 + 0.2) * chh
+        let dx = x - (ci * cw + ox), dy = y - (cj * chh + oy)
+        let sl = (hash2(i, j, seed &+ 2) - 0.5) * slant * 2
+        let dyy = dy - dx * sl
+        return (1 - sstep(len - 0.6, len + 0.4, abs(dx))) * (1 - sstep(th - 0.25, th + 0.25, abs(dyy)))
+    }
+
+    /// Bodky (spŕška, trblietky, zrnká piesku, kvietky).
+    @inline(__always)
+    private func dots(_ x: Float, _ y: Float, _ seed: UInt32, cell: Float, p: Float, r: Float) -> Float {
+        let ci = (x / cell).rounded(.down), cj = (y / cell).rounded(.down)
+        let i = Int32(ci), j = Int32(cj)
+        guard hash2(i, j, seed &+ 2) < p else { return 0 }
+        let dx = x - (ci + hash2(i, j, seed)) * cell
+        let dy = y - (cj + hash2(i, j, seed &+ 1)) * cell
+        return 1 - sstep(r * 0.6, r * 1.2, (dx * dx + dy * dy).squareRoot())
+    }
+
+    @inline(__always)
+    private func grain(_ x: Float, _ y: Float) -> Float {
+        (hash2(Int32((x * 2).rounded(.down)), Int32((y * 2).rounded(.down)), 3) - 0.5) * 0.035
+            + (fiber.sample(x / 1.3, y / 5) - 0.5) * 0.03
+    }
+
+    // MARK: - Pixel
+
+    func pixel(x: Float, y: Float, _ ch: [Float]) -> RGB {
+        let sdf = ch[TerrainField.sdf]
+        let edge = sstep(-1, 1, sdf)
+        var c: RGB
+        switch theme.id {
+        case .plaz, .ostrovy:
+            let bg = edge < 1 ? sea(x, y, ch) : .black
+            let fg = edge > 0 ? (theme.id == .plaz ? sand(x, y, ch) : island(x, y, ch)) : .black
+            c = bg.mix(fg, edge)
+        case .les:
+            c = clouds(x, y, ch, over: forest(x, y, ch, snowy: false))
+        case .zima:
             var bg = RGB.black
-            if a < 1 {
-                bg = backdrop(s, t, field)
-                if t.ground == .snow { bg = bg.scaled(1 - 0.2 * clamp01(1 + s.sdf / 10)) }
+            if edge < 1 {
+                bg = forest(x, y, ch, snowy: true)
+                bg = bg.scaled(1 - 0.12 * (1 - sstep(-12, 0, sdf)) * sstep(-24, -12, sdf))   // mäkký tieň okolo pláne
             }
-            guard a > 0 else { return bg }
-            let rc: RGB
-            switch t.ground {
-            case .sand: rc = sand(s)
-            case .island: rc = island(s)
-            case .pasture: rc = pasture(s)
-            case .park: rc = park(s)
-            case .snow, .cloud: rc = snow(s)
-            }
-            return a >= 1 ? rc : bg.mix(rc, a)
+            c = bg.mix(edge > 0 ? snowfield(x, y, ch) : .black, edge)
+        case .polia:
+            var bg = RGB.black
+            if edge < 1 { bg = fields(x, y, ch).scaled(1 - 0.15 * clamp01(1 + sdf / 8)) }
+            c = bg.mix(edge > 0 ? pasture(x, y, ch) : .black, edge)
+        case .mesto:
+            c = (edge < 1 ? city(x, y, ch) : .black).mix(edge > 0 ? park(x, y, ch) : .black, edge)
         }
+        return c.offset(grain(x, y))
     }
 
-    // MARK: - Okolie
+    // MARK: - More
 
-    private static func backdrop(_ s: Sample, _ t: Theme, _ field: TerrainField) -> RGB {
-        switch t.backdrop {
-        case .sea: return sea(s, t)
-        case .forest: return forest(s, t, field)
-        case .fields: return fields(s, t)
-        case .city: return city(s)
-        case .snowForest:
-            return RGB(0xD9E3ED).mix(RGB(0xCBD7E4), sstep(0.35, 0.65, s.detail)).offset((s.micro - 0.5) * 0.04)
+    private static let seaPlaz: [(Float, RGB)] = [(0, RGB(0xCFF1E8)), (8, RGB(0x9BE5DC)), (24, RGB(0x55CFD2)),
+                                                  (70, RGB(0x23B4C8)), (150, RGB(0x1499BD)), (320, RGB(0x0E82AC))]
+    private static let seaIslands: [(Float, RGB)] = [(0, RGB(0xC2ECE2)), (8, RGB(0x86DDD5)), (24, RGB(0x3FBFCB)),
+                                                     (70, RGB(0x1E9CC0)), (150, RGB(0x1579AE)), (320, RGB(0x10609A))]
+
+    @inline(__always)
+    private func ramp(_ stops: [(Float, RGB)], _ v: Float) -> RGB {
+        if v <= stops[0].0 { return stops[0].1 }
+        for k in 1..<stops.count where v < stops[k].0 {
+            let a = stops[k - 1], b = stops[k]
+            return a.1.mix(b.1, (v - a.0) / (b.0 - a.0))
         }
+        return stops[stops.count - 1].1
     }
 
-    private static func sea(_ s: Sample, _ t: Theme) -> RGB {
-        let depth = max(-s.sdf, 0)
-        let t1 = 1 - expf(-depth / t.seaFalloff)
-        let t2 = 1 - expf(-depth / 260)
-        var c = t.shallow.mix(t.deep, t1).mix(t.deepest, t2 * 0.85)
-        c = c.offset((s.micro - 0.5) * 0.06 * (1 - t1)).offset((s.detail - 0.5) * 0.05 * t1)
-        let z = (depth - 24) / 3.2
-        c = c.mix(t.shelf, expf(-z * z) * 0.22)
-        c = c.mix(.white, clamp01(1 - depth / 2.6) * 0.8)
-        return c.mix(t.shelf, (s.y / s.H) * 0.07)
+    /// Pena v danom bode: lem a spŕška pri brehu, línie ďalej od brehu (0–1).
+    func foam(x: Float, y: Float) -> (shore: Float, lines: Float) {
+        let sdf = field.value(TerrainField.sdf, x, y)
+        guard sdf < 2 else { return (0, 0) }
+        let nz = field.value(TerrainField.n40, x, y)
+        let depth = max(-sdf, 0) + (nz - 0.5) * 6
+        let brk = sstep(0.3, 0.55, field.value(TerrainField.n22, x, y))
+        let lip = (1 - sstep(1.2, 3.2, depth)) * (0.75 + 0.25 * brk)
+        let spray = depth < 25 ? dots(x, y, s &+ 40, cell: 4.2, p: 0.55 * expf(-depth / 5), r: 0.6) : 0
+        let z1 = (depth - (13 + (nz - 0.5) * 10)) / 0.9
+        let l1 = expf(-z1 * z1) * sstep(0.42, 0.6, field.value(TerrainField.n55, x, y)) * 0.55
+        let z2 = (depth - (28 + (nz - 0.5) * 16)) / 0.8
+        let l2 = expf(-z2 * z2) * sstep(0.5, 0.66, field.value(TerrainField.n70, x, y)) * 0.32
+        let water = clamp01(-sdf + 0.5)
+        return (min(max(lip, spray), 1) * water, max(l1, l2) * water)
     }
 
-    private static let meadow = RGB(0x9CC56A), meadowAlt = RGB(0x86B457)
-    private static let crownGap = RGB(0x1E3F1D), crownDark = RGB(0x2E5E2C)
-    private static let crownMid = RGB(0x4C8239), crownLight = RGB(0x86BD55)
+    private func sea(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        let nz = ch[TerrainField.n40]
+        let depth = max(-ch[TerrainField.sdf], 0) + (nz - 0.5) * 6
+        var c = ramp(theme.id == .plaz ? Self.seaPlaz : Self.seaIslands, depth)
+        let m = ch[TerrainField.mot200]
+        c = c.mix(c.scaled(1.08).offset(0.04), sstep(0.52, 0.72, m) * sstep(10, 40, depth) * 0.8)   // svetlé škvrny
+        c = c.mix(c.scaled(0.93), sstep(0.6, 0.8, 1 - m) * sstep(40, 120, depth) * 0.5)
+        // pena je v podklade z polovice – zvyšok „dýcha“ v animácii
+        let f = foam(x: x, y: y)
+        c = c.mix(.white, max(f.shore, f.lines) * 0.55)
+        let spark = depth > 20 ? dots(x, y, s &+ 50, cell: 22, p: 0.35, r: 0.75) * sstep(20, 60, depth) : 0
+        return c.mix(.white, spark * 0.6)
+    }
 
-    /// Les zhora: háje veľkých tieňovaných korún, medzi nimi lúky.
-    private static func forest(_ s: Sample, _ t: Theme, _ field: TerrainField) -> RGB {
-        let grove = sstep(0.47, 0.53, s.large + (s.detail - 0.5) * 0.25)
-        var c = meadow.mix(meadowAlt, sstep(0.35, 0.65, s.detail)).offset((s.micro - 0.5) * 0.06)
-        var tree: Float = 0
-        var tc = crownDark
-        if grove > 0.001 {
-            let w = worley(s.x, s.y, cell: 17, seed: t.seed &+ 40, jitter: 0.75)
-            let crown = clamp01(1 - w.f1 / (8.5 + w.id * 3.5))
-            let wl = worley(s.x + 3, s.y - 3, cell: 17, seed: t.seed &+ 40, jitter: 0.75)
-            let lit = clamp01(1 - wl.f1 / (8.5 + wl.id * 3.5))
-            tc = crownGap.mix(crownDark, sstep(0, 0.25, crown))
-            tc = tc.mix(crownMid, smooth(lit) * sstep(0, 0.2, crown))
-            tc = tc.mix(crownLight, sstep(0.7, 1, lit) * 0.55)
-            tc = tc.offset((s.micro - 0.5) * 0.04)
-            tree = grove * max(sstep(0, 0.15, crown), sstep(0.55, 0.62, grove))
+    // MARK: - Lúka a les
+
+    private func grassfield(_ x: Float, _ y: Float, _ ch: [Float], seed: UInt32,
+                            _ c0: RGB, _ c1: RGB, _ c2: RGB, mark: RGB, markA: Float) -> RGB {
+        let m = ch[TerrainField.mot140]
+        var c = c0.mix(c1, sstep(0.4, 0.65, m))
+        c = c.mix(c2, sstep(0.55, 0.75, ch[TerrainField.n70]) * 0.6)
+        let h = hatch(x, y, seed &+ 60)
+        return h > 0 ? c.mix(mark, h * markA * (0.6 + 0.4 * sstep(0.3, 0.7, m))) : c
+    }
+
+    private func forest(_ x: Float, _ y: Float, _ ch: [Float], snowy: Bool) -> RGB {
+        let thr: Float = snowy ? 0.22 : 0.5
+        var bg = snowy
+            ? grassfield(x, y, ch, seed: s, RGB(0xE4ECF3), RGB(0xD6E1EC), RGB(0xEEF3F8), mark: RGB(0x9FB4CB), markA: 0.55)
+            : grassfield(x, y, ch, seed: s, RGB(0xBCD47E), RGB(0xA8C86C), RGB(0xCADF91), mark: RGB(0x5E8A3A), markA: 0.5)
+        var g = ch[TerrainField.large] + (ch[TerrainField.detail] - 0.5) * 0.25
+        if abs(g - thr) < 0.06 {                                       // kopovitý okraj lesa
+            let w = worley(x, y, cell: 26, seed: s &+ 44, jitter: 0.8)
+            g += clamp01(1 - w.f1 / (14 + w.id * 6)) * 0.035
         }
-        // tieň hája na lúku (vpravo dole)
-        let gs = sstep(0.47, 0.53, field.value(TerrainField.large, s.x - 6, s.y + 6)
-                       + (field.value(TerrainField.detail, s.x - 6, s.y + 6) - 0.5) * 0.25)
-        c = c.scaled(1 - 0.3 * gs * (1 - tree))
-        return c.mix(tc, clamp01(tree))
+        let tree = sstep(thr - 0.012, thr + 0.012, g)
+        // tieň lesa na lúku (vpravo dole)
+        if tree < 1 {
+            let gs = field.value(TerrainField.large, x - 7, y + 7) + (field.value(TerrainField.detail, x - 7, y + 7) - 0.5) * 0.25
+            bg = bg.scaled(1 - 0.22 * sstep(thr - 0.012, thr + 0.012, gs) * (1 - tree))
+        }
+        guard tree > 0 else { return bg }
+
+        let (c0, c1, c2, rim) = snowy
+            ? (RGB(0x2E5A55), RGB(0x24494A), RGB(0x3B6B63), RGB(0x1D3B3C))
+            : (RGB(0x4E7F3B), RGB(0x3E6C30), RGB(0x5E9246), RGB(0x2F5A26))
+        var fc = c0.mix(c1, sstep(0.45, 0.7, ch[TerrainField.mot60]))
+        fc = fc.mix(c2, sstep(0.6, 0.8, ch[TerrainField.n30]) * 0.7)
+        let crowns = worley(x, y, cell: 9, seed: s &+ 92, jitter: 0.9)          // drobná štruktúra korún
+        fc = fc.scaled(1 - 0.10 * sstep(0.4, 1, crowns.f1 / 6))
+        fc = fc.mix(rim, (1 - sstep(0, 0.03, g - thr)) * 0.5)
+        if snowy {                                                            // ojínené koruny
+            fc = fc.mix(RGB(0xDCE6EE), 0.22 + 0.18 * sstep(0.4, 0.7, ch[TerrainField.n50]))
+            fc = fc.mix(RGB(0xF4F8FB), dots(x, y, s &+ 93, cell: 4.5, p: 0.45, r: 0.95) * 0.75)
+            fc = fc.mix(RGB(0xF4F8FB), dots(x, y, s &+ 94, cell: 7, p: 0.3, r: 1.4) * 0.5)
+        }
+        return bg.mix(fc, tree)
     }
 
-    /// (farba, farba riadkov, sila riadkov)
-    private static let crops: [(RGB, RGB, Float)] = [
-        (RGB(0xE3C46A), RGB(0xC9A64B), 0.5),    // pšenica
-        (RGB(0x7FA346), RGB(0x6A8C38), 0.55),   // mladé obilie
-        (RGB(0x9B7652), RGB(0x7E5C3E), 0.9),    // oranisko
-        (RGB(0xA48ACB), RGB(0x7E64A8), 0.8),    // levanduľa
-        (RGB(0xF2D84A), RGB(0xD8BC2E), 0.3),    // repka
-        (RGB(0xD9A35A), RGB(0xBF8A44), 0.6),    // kukurica
-        (RGB(0xC9B27A), RGB(0xB09662), 0.6),    // strnisko
+    // MARK: - Polia
+
+    private static let fieldColors: [(RGB, RGB)] = [
+        (RGB(0xE2CD8A), RGB(0xD2B96E)), (RGB(0xA9C672), RGB(0x93B35E)), (RGB(0xB89371), RGB(0x9C7A5A)),
+        (RGB(0xB7A6D2), RGB(0x9C8ABD)), (RGB(0xE9D874), RGB(0xD8C55A)), (RGB(0xD8C79C), RGB(0xC6B385)),
+        (RGB(0x9FBF6A), RGB(0x8AAA58)),
     ]
-    static let fieldCell: Float = 170
 
-    /// Políčka: Voronoiove parcely, každá s plodinou a smerom riadkov, živé ploty na hraniciach.
-    private static func fields(_ s: Sample, _ t: Theme) -> RGB {
-        let w = worley(s.x, s.y, cell: fieldCell, seed: t.seed &+ 60, jitter: 0.9)
-        let crop = crops[min(Int(w.id * Float(crops.count)), crops.count - 1)]
+    private func fields(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        let wx = x + ch[TerrainField.warpX], wy = y + ch[TerrainField.warpY]   // zvlnené hranice parciel
+        let w = worley(wx, wy, cell: 175, seed: s &+ 60, jitter: 0.9)
+        let pair = Self.fieldColors[min(Int(w.id * Float(Self.fieldColors.count)), Self.fieldColors.count - 1)]
         let ang = w.id * .pi * 7.3
-        let u = s.x * cosf(ang) + s.y * sinf(ang)
-        let wave = sinf(u / 2.2) * 0.5 + 0.5
-        var c = crop.0.mix(crop.1, wave * wave * crop.2).offset((s.micro - 0.5) * 0.05)
+        let u = wx * cosf(ang) + wy * sinf(ang)
+        let rows = powf(sinf(u / 2.4) * 0.5 + 0.5, 1.5)
+        var c = pair.0.mix(pair.1, rows * 0.55)
+        c = c.scaled(1 + (ch[TerrainField.mot140] - 0.5) * 0.12)
         let edge = w.f2 - w.f1
+        guard edge < 12 else { return c }
+        c = c.scaled(1 - 0.2 * (1 - sstep(4, 12, edge)))
         if edge < 9 {
-            c = c.scaled(1 - 0.25 * (1 - sstep(3.5, 9, edge)))
-            let hedge = 1 - sstep(2.5, 5.5, edge)
-            if hedge > 0 {
-                let hw = worley(s.x, s.y, cell: 5, seed: t.seed &+ 61)
-                let hc = RGB(0x2F5E2A).mix(RGB(0x5C8F3E), clamp01(1 - hw.f1 / 3.5))
-                c = c.mix(hc, hedge)
-            }
+            let hw = worley(x, y, cell: 7, seed: s &+ 61, jitter: 0.9)
+            let bump = clamp01(1 - hw.f1 / (4 + hw.id * 2))
+            let hedge = 1 - sstep(2, 6.5, edge + (1 - bump) * 2.5)
+            c = c.mix(RGB(0x4E7F3B).mix(RGB(0x6E9C4E), bump), hedge * 0.95)
         }
         return c
     }
 
-    /// Mesto: asfalt, chodníky, prerušované čiary. Budovy kreslí CityPainter vektorovo.
-    private static func city(_ s: Sample) -> RGB {
+    // MARK: - Mesto
+
+    private func city(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
         let bw = CityGrid.blockW, bh = CityGrid.blockH, half = CityGrid.street / 2
-        let u = fmodf(s.x, bw), v = fmodf(s.y, bh)
-        let hu = min(u, bw - u), hv = min(v, bh - v)
-        let ds = min(hu, hv)
-        if ds < half {
-            if (hv < 0.55 && fmodf(s.x, 14) < 7 && hu > half) || (hu < 0.55 && fmodf(s.y, 14) < 7 && hv > half) {
-                return RGB(0xE8E2C8)
-            }
-            return RGB(0x4A4E55).offset((s.micro - 0.5) * 0.05)
+        let u = fmodf(x, bw), v = fmodf(y, bh)
+        let hu = min(u, bw - u), hv = min(v, bh - v), ds = min(hu, hv)
+        let m = sstep(0.4, 0.65, ch[TerrainField.mot140])
+        let ground = RGB(0xDDD6C9).mix(RGB(0xD2CABB), m)
+        let road = RGB(0x9A9DA2).mix(RGB(0x8D9095), m)
+        var c = road.mix(ground, sstep(half - 0.6, half + 0.6, ds))
+        let z = (ds - (half + 1.6)) / 1.0
+        c = c.mix(RGB(0xE9E4DA), expf(-z * z) * 0.7)                           // chodník
+        if (hv < 0.6 && fmodf(x, 16) < 8 && hu > half) || (hu < 0.6 && fmodf(y, 16) < 8 && hv > half) {
+            c = c.mix(RGB(0xF1EEE4), 0.6)
         }
-        if ds < half + 3 { return RGB(0xDAD6CE) }
-        return RGB(0xC9C4BA).offset((s.micro - 0.5) * 0.05)
-    }
-
-    // MARK: - Povrch pod dokumentmi
-
-    @inline(__always)
-    private static func relief(_ gx: Float, _ gy: Float, _ k: Float = 22) -> Float {
-        let L = TerrainRenderer.light
-        let nx = -gx * k, ny = -gy * k
-        let nl = (nx * nx + ny * ny + 1).squareRoot()
-        return (nx * L.x + ny * L.y + L.z) / nl - L.z
-    }
-
-    private static func sand(_ s: Sample) -> RGB {
-        let inl = max(s.sdf, 0)
-        let calm = 1 - 0.6 * s.calm
-        var c = RGB(0xF2E7CF).mix(RGB(0xEADBBB), sstep(0.35, 0.65, s.detail) * calm).offset((s.micro - 0.5) * 0.035)
-        let g = hash2(Int32((s.x * 1.7).rounded(.down)), Int32((s.y * 1.7).rounded(.down)), 5)
-        if g > 0.985 { c = c.offset(-0.10) } else if g < 0.012 { c = c.offset(0.06) }
-        return c.mix(RGB(0xD9C59B), clamp01(1 - inl / 7) * 0.55)          // mokrý piesok pri vode
-    }
-
-    private static func island(_ s: Sample) -> RGB {
-        let inl = max(s.sdf, 0)
-        let calm = 1 - 0.6 * s.calm
-        var lc = RGB(0x7FB550).mix(RGB(0x5E9A3C), sstep(0.36, 0.64, s.detail) * calm).offset((s.micro - 0.5) * 0.07 * calm)
-        let sandc = RGB(0xEDD5A1).mix(RGB(0xCDB079), clamp01(1 - inl / 3.5) * 0.55)
-        lc = sandc.mix(lc, sstep(13, 18, inl))
-        let sh = min(max(relief(s.gx, s.gy), -0.35), 0.35)
-        if sh > 0 { return lc.scaled(1 + sh * 1.1) }
-        return lc.mix(lc.mul(RGB(0x2F5D46)).scaled(1.6), -sh * 1.6)
-    }
-
-    private static let flowerColors = [RGB(0xFFFFFF), RGB(0xF7D046), RGB(0xE86A92)]
-
-    private static func pasture(_ s: Sample) -> RGB {
-        let inl = max(s.sdf, 0)
-        let calm = 1 - 0.6 * s.calm
-        var c = RGB(0xB9E07E).mix(RGB(0xA6D46C), sstep(0.35, 0.65, s.detail) * calm).offset((s.micro - 0.5) * 0.06 * calm)
-        if s.calm < 0.3 {                                                  // kvietky mimo ikon
-            let w = worley(s.x, s.y, cell: 9, seed: 404)
-            if w.f1 < 1.1 && w.id > 0.55 { c = flowerColors[Int(w.id * 7) % 3] }
-        }
-        let fz = (inl - 4) / 0.55
-        c = c.mix(RGB(0x8A6440), expf(-fz * fz) * 0.9)                    // žrď plota
-        if fmodf(s.x + s.y, 9) < 1.4 && abs(inl - 4) < 1.3 { c = RGB(0x6B4A2E) }   // stĺpiky
-        return c.mix(c.scaled(0.82), clamp01(1 - abs(inl - 2.2) / 1.2) * 0.6)   // tieň plota
-    }
-
-    private static func park(_ s: Sample) -> RGB {
-        let inl = max(s.sdf, 0)
-        let calm = 1 - 0.6 * s.calm
-        var c = RGB(0x86C25C).mix(RGB(0x74B04E), sstep(0.35, 0.65, s.detail) * calm).offset((s.micro - 0.5) * 0.06 * calm)
-        if fmodf(s.x, 24) < 12 { c = c.offset(0.035 * calm) }             // pruhy po kosení
-        c = c.mix(RGB(0x3F7A33), clamp01(1 - abs(inl - 3) / 2.2))         // živý plot
-        return c.mix(RGB(0xD8D2C4), clamp01(1 - inl / 1.2))               // obrubník
-    }
-
-    private static func snow(_ s: Sample) -> RGB {
-        let calm = 1 - 0.6 * s.calm
-        var c = RGB(0xF7FAFD).mix(RGB(0xE6EEF6), sstep(0.35, 0.65, s.detail) * calm).offset((s.micro - 0.5) * 0.03 * calm)
-        let sh = min(max(relief(s.gx, s.gy) * 1.3, -0.35), 0.35)
-        if sh > 0 { c = c.scaled(1 + sh * 0.5) }
-        return c.mix(c.mul(RGB(0x8FA6C4)).scaled(1.25), max(-sh, 0) * 1.6)
-    }
-
-    /// Okraj oblaku: vzdialenosť od okraja oblasti + kopy (Worley) → kopovitý obrys.
-    @inline(__always)
-    private static func cloudShape(_ x: Float, _ y: Float, _ sdf: Float) -> Float {
-        let w = worley(x, y, cell: 24, seed: 333, jitter: 0.7)
-        let puff = (11 + w.id * 6) - w.f1
-        return sdf + 0.9 * min(max(puff, -12), 20)
-    }
-
-    private static func cloudColor(_ s: Sample, _ cs: Float) -> RGB {
-        let wl = worley(s.x + 3, s.y - 3, cell: 24, seed: 333, jitter: 0.7)
-        let lit = clamp01(1 - wl.f1 / (11 + wl.id * 6))
-        var c = RGB(0xC9D8EA).mix(RGB(0xF7FAFD), sstep(0, 0.7, lit * 0.8 + sstep(0, 30, cs) * 0.6))
-        c = c.mix(.white, sstep(0.5, 1, lit) * 0.6 * (1 - sstep(10, 30, cs)))
         return c
+    }
+
+    // MARK: - Povrchy pod dokumentmi
+
+    private func sand(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        let inl = max(ch[TerrainField.sdf], 0)
+        var c = RGB(0xF5EEDF).mix(RGB(0xEDE2CC), sstep(0.4, 0.7, ch[TerrainField.mot140]) * (1 - 0.5 * ch[TerrainField.calm]))
+        c = c.mix(RGB(0xD8C7A6), dots(x, y, s &+ 21, cell: 3.2, p: 0.35, r: 0.45) * 0.55)
+        c = c.mix(.white, dots(x, y, s &+ 22, cell: 3.6, p: 0.2, r: 0.4) * 0.6)
+        let nz = ch[TerrainField.n40]
+        c = c.mix(RGB(0xE2D3B6), (1 - sstep(3, 14 + (nz - 0.5) * 8, inl)) * 0.7)          // mokrý piesok
+        let z = (inl - (9 + (nz - 0.5) * 8)) / 0.8
+        return c.mix(.white, expf(-z * z) * sstep(0.4, 0.6, ch[TerrainField.n30]) * 0.5)  // stopa ustupujúcej vlny
+    }
+
+    private func island(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        let inl = max(ch[TerrainField.sdf], 0)
+        let grass = grassfield(x, y, ch, seed: s &+ 200, RGB(0x9CCB6A), RGB(0x86B957), RGB(0xB0D67C),
+                               mark: RGB(0x4C7A32), markA: 0.45)
+        let nz = (ch[TerrainField.n40] - 0.5) * 8
+        let t = sstep(12 + nz, 15 + nz, inl)
+        if t >= 1 { return grass }
+        return sand(x, y, ch).mix(grass, t)
+    }
+
+    @inline(__always)
+    private func cloudShape(_ x: Float, _ y: Float, _ sdf: Float) -> (shape: Float, f1: Float, f2: Float, r: Float) {
+        let w = worley(x, y, cell: 30, seed: 333, jitter: 0.7)
+        let r = 14 + w.id * 7
+        return (sdf + 0.85 * min(max(r - w.f1, -14), 22), w.f1, w.f2, r)
+    }
+
+    private func clouds(_ x: Float, _ y: Float, _ ch: [Float], over: RGB) -> RGB {
+        var bg = over
+        let ss = field.value(TerrainField.sdf, x - 10, y + 14)
+        if ss > -30 {                                                         // mäkký tieň oblaku
+            bg = bg.scaled(1 - 0.18 * sstep(-6, 10, cloudShape(x - 10, y + 14, ss).shape))
+        }
+        let sdf = ch[TerrainField.sdf]
+        guard sdf > -24 else { return bg }
+        let cs = cloudShape(x, y, sdf)
+        let a = sstep(-1, 1, cs.shape)
+        guard a > 0 else { return bg }
+        let wl = worley(x + 6, y - 6, cell: 30, seed: 333, jitter: 0.7)
+        let lit = clamp01(1 - wl.f1 / (14 + wl.id * 7))
+        let inner = sstep(0, 46, cs.shape)
+        var c = RGB(0xC5D4E6).mix(RGB(0xFBFDFF), sstep(0.05, 0.6, lit + inner * 0.45))
+        let seam = (1 - sstep(0.6, 2.6, cs.f2 - cs.f1)) * (cs.f1 < cs.r * 1.1 ? 1 : 0) * (1 - inner * 0.7)
+        c = c.mix(RGB(0xD3DFEC), seam * 0.55).offset(grain(x, y) * 0.5)
+        return bg.mix(c, a)
+    }
+
+    private static let flowerColors = [RGB(0xFFFFFF), RGB(0xF6D55C), RGB(0xEE8FB0)]
+
+    private func pasture(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        let inl = max(ch[TerrainField.sdf], 0)
+        var c = grassfield(x, y, ch, seed: s &+ 300, RGB(0xC3DF8E), RGB(0xB2D47C), RGB(0xD3E8A2),
+                           mark: RGB(0x6A9645), markA: 0.4)
+        if ch[TerrainField.calm] < 0.3 {
+            let f = dots(x, y, s &+ 301, cell: 7, p: 0.25, r: 0.9)
+            if f > 0 {
+                let pick = Int(hash2(Int32((x / 7).rounded(.down)), Int32((y / 7).rounded(.down)), s &+ 302) * 3) % 3
+                c = c.mix(Self.flowerColors[pick], f * 0.9)
+            }
+        }
+        return c.mix(c.scaled(0.85), (1 - sstep(1, 5, inl)) * 0.6)                // tmavší lem trávy
+    }
+
+    private func park(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        let c = grassfield(x, y, ch, seed: s &+ 400, RGB(0xA9CF7E), RGB(0x98C16C), RGB(0xB9DA8E),
+                           mark: RGB(0x5A8A3C), markA: 0.4)
+        return c.mix(RGB(0xEDE8DE), 1 - sstep(1, 3, max(ch[TerrainField.sdf], 0)))  // obrubník
+    }
+
+    private func snowfield(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        let inl = max(ch[TerrainField.sdf], 0)
+        var c = RGB(0xFBFDFF).mix(RGB(0xEEF3F9), sstep(0.4, 0.7, ch[TerrainField.mot140]) * (1 - 0.5 * ch[TerrainField.calm]))
+        c = c.mix(.white, dots(x, y, s &+ 501, cell: 5, p: 0.2, r: 0.5) * 0.8)
+        return c.mix(RGB(0xD5E0EC), (1 - sstep(0, 9, inl)) * 0.75)               // modrastý okraj
     }
 }

@@ -1,27 +1,26 @@
 # Krajinka (macOS) – prototyp
 
-Živá tapeta pre macOS. Prečíta, kde ležia ikony na ploche, a pod dokumentmi
-vytvorí iný povrch než v okolí: piesok uprostred mora, oblaky nad lesom,
-pastvinu medzi poliami, park uprostred mesta alebo snehovú pláň v lese.
-Blízke dokumenty zdieľajú spoločnú oblasť. Mimo dokumentov takáto oblasť
-nikdy nevznikne.
+Živá tapeta pre macOS v maľovanom štýle. Prečíta, kde ležia ikony na ploche,
+a pod dokumentmi vytvorí iný povrch než v okolí: piesok uprostred mora,
+oblaky nad lesom, pastvinu medzi poliami, park v meste alebo snehovú pláň
+v ojínenom lese. Blízke dokumenty zdieľajú spoločnú oblasť. Mimo dokumentov
+takáto oblasť nikdy nevznikne.
 
 ![Šesť tém](docs/temy.jpg)
 
-| Téma | Pod dokumentmi | Okolie | Animácie |
+| Téma | Pod dokumentmi | Okolie | Pohyb |
 |---|---|---|---|
-| Pláž | piesok, slnečníky, mušle, palmy | tyrkysové more | vlny, pena, záblesky, plachetnice, čajky |
-| Ostrovy | tráva s plážou, palmy | more | ako Pláž |
-| Les a oblaky | kopovité oblaky | les a lúky zhora | plávajúce oblaky, vtáky |
-| Polia | pastvina s plotom a kvetmi | parcely plodín, živé ploty, farmy, balíky slamy | oblaky, vtáky, motýle |
-| Mesto | park | ulice, domy a mrakodrapy s tieňmi | autá, oblaky, vtáky |
-| Zima | snehová pláň | hustý zasnežený les | sneženie, trblietky, vrany |
+| Pláž | krémový piesok, mokrý pás, stopa vlny | tyrkysové more, pena, spŕška | pena dýcha, svetlo pláva po hladine, trblietky |
+| Ostrovy | tráva s plážou, stromy | hlbšie more | ako Pláž |
+| Les a oblaky | kopovité oblaky | les a lúky zhora | tiene oblakov, vietor v tráve |
+| Polia | pastvina s kvetmi | parcely plodín, živé ploty | tiene oblakov, vietor |
+| Mesto | park | ulice, domy a mrakodrapy, stromy | tiene oblakov |
+| Zima | snehová pláň | ojínený les | sneženie |
 
-V menu je navyše prepínač **Chodníky medzi dokumentmi** (pri mori s mostíkmi).
+V menu je navyše prepínač **Chodníky medzi dokumentmi**.
 
-> Náhľady vyrenderoval `tools/terrain_preview.py`. Je to verný prepis renderu
-> do Pythonu (numpy + cairo), slúži na ladenie tém bez Macu. Modré štvorce
-> simulujú ikony.
+> Náhľady vyrenderoval `tools/terrain_preview.py` (numpy + cairo). Slúži na
+> ladenie vzhľadu bez Macu a vzhľad aplikácie zachytáva približne.
 
 ## Požiadavky
 
