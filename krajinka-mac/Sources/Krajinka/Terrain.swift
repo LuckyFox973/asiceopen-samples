@@ -3,11 +3,12 @@ import Foundation
 
 /// Výsledok jedného prekreslenia jednej obrazovky.
 struct RenderedScene {
-    let terrain: CGImage        // nepriehľadný podklad vrátane chodníkov a dekorácií
-    let waterMask: CGImage      // alfa = voda (iskry, záblesky)
+    let terrain: CGImage        // nepriehľadný podklad: okolie, oblasti dokumentov, budovy, flóra
+    let waterMask: CGImage      // alfa = voda (iskry, záblesky) – len pri mori
     let foamMask: CGImage       // alfa = pena tesne pri brehu
     let waveMasks: [CGImage]    // prstence v rôznych hĺbkach → vlny bežiace k brehu
-    let swimSpots: [CGPoint]    // miesta s dostatkom vody pre lodičky/kačky
+    let swimSpots: [CGPoint]    // miesta pre lodičky
+    let carRoutes: [(CGPoint, CGPoint)]   // úseky ulíc pre autá (Mesto)
 }
 
 /// Konštanty vĺn – zdieľa ich render (masky) aj SceneView (časovanie).
@@ -18,11 +19,17 @@ enum Waves {
     static let foamPhase: Double = 0.78
 }
 
-/// Hrubá mriežka (6 bodov) s viacerými kanálmi, prekladaná v jednom poli
-/// kvôli rýchlemu bilineárnemu vzorkovaniu.
+/// Mriežka ulíc v téme Mesto (body).
+enum CityGrid {
+    static let blockW: Float = 150
+    static let blockH: Float = 118
+    static let street: Float = 14
+}
+
+/// Hrubá mriežka (6 bodov) s viacerými kanálmi, prekladaná v jednom poli.
 struct TerrainField {
     static let stride = 8
-    static let height = 0, detail = 1, micro = 2, gradX = 3, gradY = 4, sdf = 5, clear = 6
+    static let sdf = 0, calm = 1, detail = 2, micro = 3, large = 4, gradX = 5, gradY = 6
 
     let cols: Int
     let rows: Int
@@ -45,12 +52,12 @@ struct TerrainField {
         return t + (u - t) * fy
     }
 
-    func height(_ p: CGPoint) -> Float { value(Self.height, Float(p.x), Float(p.y)) }
-    /// Vzdialenosť od pobrežia v bodoch: + pevnina, – voda.
+    /// Vzdialenosť od okraja oblasti dokumentov v bodoch: + vnútri, – mimo.
     func sdf(_ p: CGPoint) -> Float { value(Self.sdf, Float(p.x), Float(p.y)) }
-    /// 0 = mimo čistiny, 1 = čistinka pod ikonou.
-    func clear(_ p: CGPoint) -> Float { value(Self.clear, Float(p.x), Float(p.y)) }
+    /// 1 = priamo pod ikonou (textúra sa tu tlmí), 0 = ďalej od nej.
+    func clear(_ p: CGPoint) -> Float { value(Self.calm, Float(p.x), Float(p.y)) }
     func detail(_ p: CGPoint) -> Float { value(Self.detail, Float(p.x), Float(p.y)) }
+    func large(_ p: CGPoint) -> Float { value(Self.large, Float(p.x), Float(p.y)) }
 }
 
 enum TerrainRenderer {
@@ -62,151 +69,75 @@ enum TerrainRenderer {
         return (v.0 / l, v.1 / l, v.2 / l)
     }()
 
-    // MARK: - Pole
+    // MARK: - Pole oblastí
+
+    /// Plynulé minimum – blízke oblasti sa zlejú, vzdialené ostanú samostatné.
+    @inline(__always)
+    private static func smin(_ a: Float, _ b: Float, _ k: Float) -> Float {
+        let h = clamp01(0.5 + 0.5 * (b - a) / k)
+        return b * (1 - h) + a * h - k * h * (1 - h)
+    }
 
     static func buildField(size: CGSize, icons: [CGRect], theme: Theme) -> TerrainField {
         let cols = Int((Float(size.width) / cell).rounded(.up)) + 2
         let rows = Int((Float(size.height) / cell).rounded(.up)) + 2
         let S = TerrainField.stride
         var data = [Float](repeating: 0, count: cols * rows * S)
-
-        let noise = ValueNoise(seed: theme.seed)
-        let detailNoise = ValueNoise(seed: theme.seed &+ 977)
-        let microNoise = ValueNoise(seed: theme.seed &+ 313)
-        let clearNoise = ValueNoise(seed: theme.seed &+ 555)
+        let s = theme.seed
+        let wobbleNoise = ValueNoise(seed: s &+ 555)
+        let detailNoise = ValueNoise(seed: s &+ 977)
+        let microNoise = ValueNoise(seed: s &+ 313)
+        let largeNoise = ValueNoise(seed: s &+ 71)
         let rects = icons.map { (Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
-        let hasIcons = !rects.isEmpty
-        // Každý dokument má vlastný ostrov: zaoblený obdĺžnik okolo rámika, mierne
-        // posunutý, inak veľký a so zvlneným pobrežím.
-        let islands: [(x0: Float, y0: Float, x1: Float, y1: Float, cr: Float, r: Float)] =
+
+        // každá ikona: zaoblený obdĺžnik okolo rámika, mierne posunutý a inak veľký
+        let rr = theme.regionRadius
+        let shapes: [(x0: Float, y0: Float, x1: Float, y1: Float, cr: Float, r: Float)] =
             rects.enumerated().map { k, r in
                 let kk = Int32(k)
                 let ox = (hash2(kk, 1, 901) - 0.5) * 16, oy = (hash2(kk, 2, 901) - 0.5) * 16
                 let cr = min(32, (r.2 - r.0) / 2, (r.3 - r.1) / 2)
-                return (r.0 + cr + ox, r.1 + cr + oy, r.2 - cr + ox, r.3 - cr + oy, cr, 30 + 16 * hash2(kk, 3, 901))
+                let radius = rr.min + (rr.max - rr.min) * hash2(kk, 3, 901)
+                return (r.0 + cr + ox, r.1 + cr + oy, r.2 - cr + ox, r.3 - cr + oy, cr, radius)
             }
 
         for j in 0..<rows {
             let py = Float(j) * cell
             for i in 0..<cols {
                 let px = Float(i) * cell
-                var f: Float
-                if theme.landOnlyAtIcons {
-                    // všade pod hladinou; zem vytvárajú len dokumenty
-                    f = 0.16 + (noise.fbm(px / 140, py / 140, octaves: 3) - 0.5) * 0.34
-                } else {
-                    f = theme.waterLevel + (noise.fbm(px / 280, py / 280, octaves: 4) - 0.5) * 0.95
+                var e: Float = 1e4          // vzdialenosť od okraja oblasti (záporná = vnútri)
+                var d1: Float = 1e4         // vzdialenosť od najbližšieho rámika ikony
+                for (k, r) in rects.enumerated() {
+                    let sh = shapes[k]
+                    let dx = max(sh.x0 - px, 0, px - sh.x1)
+                    let dy = max(sh.y0 - py, 0, py - sh.y1)
+                    let ek = max((dx * dx + dy * dy).squareRoot() - sh.cr, 0) - sh.r
+                    e = smin(e, ek, theme.regionBlend)
+                    let rx = max(r.0 - px, 0, px - r.2)
+                    let ry = max(r.1 - py, 0, py - r.3)
+                    d1 = min(d1, (rx * rx + ry * ry).squareRoot())
                 }
-
-                var clear: Float = 0
-                if hasIcons {
-                    let wobble = (clearNoise.fbm(px / 55, py / 55, octaves: 3) - 0.5) * 30
-                    var e1 = Float.greatestFiniteMagnitude          // vzdialenosť od pobrežia najbližšieho ostrova
-                    var d1 = Float.greatestFiniteMagnitude          // vzdialenosť od najbližšieho rámika
-                    var d2 = Float.greatestFiniteMagnitude          // …a od druhého najbližšieho
-                    for (k, r) in rects.enumerated() {
-                        let dx = max(r.0 - px, 0, px - r.2)
-                        let dy = max(r.1 - py, 0, py - r.3)
-                        let d = (dx * dx + dy * dy).squareRoot()
-                        if d < d1 { d2 = d1; d1 = d } else if d < d2 { d2 = d }
-
-                        let isl = islands[k]
-                        let ix = max(isl.x0 - px, 0, px - isl.x1)
-                        let iy = max(isl.y0 - py, 0, py - isl.y1)
-                        let rounded = max((ix * ix + iy * iy).squareRoot() - isl.cr, 0)
-                        e1 = min(e1, rounded - (isl.r + wobble))
-                    }
-                    var island = Band.shore - e1 * 0.012                  // kupola, najvyššie pod ikonou
-                    if d2 < .greatestFiniteMagnitude {
-                        // prieliv pozdĺž osi medzi dvoma susednými dokumentmi
-                        island -= 0.6 * smooth(clamp01(1 - (d2 - d1) / 28))
-                    }
-                    if d1 < 2 { island = max(island, Band.shore + 0.05) }  // dokument nikdy nestojí vo vode
-                    f = max(f, island)
-                    clear = 1 - sstep(0, 14, d1)
-                }
+                var sdf = -(e + (wobbleNoise.fbm(px / 60, py / 60, octaves: 3) - 0.5) * theme.regionWobble)
+                if d1 < 2 { sdf = max(sdf, 6) }       // dokument nikdy nestojí mimo svojej oblasti
 
                 let k = (j * cols + i) * S
-                data[k + TerrainField.height] = f
+                data[k + TerrainField.sdf] = sdf
+                data[k + TerrainField.calm] = 1 - sstep(0, 14, d1)
                 data[k + TerrainField.detail] = detailNoise.fbm(px / 90, py / 90, octaves: 2)
                 data[k + TerrainField.micro] = microNoise.fbm(px / 16, py / 16, octaves: 2)
-                data[k + TerrainField.clear] = clear
+                data[k + TerrainField.large] = largeNoise.fbm(px / 240, py / 240, octaves: 3)
             }
         }
-
-        // gradient výšky (na bod) – pre tieňovanie reliéfu a pre SDF
-        for j in 0..<rows {
-            for i in 0..<cols {
-                let k = (j * cols + i) * S
-                if i > 0 && i < cols - 1 {
-                    data[k + TerrainField.gradX] = (data[k + S] - data[k - S]) / (2 * cell)
-                }
-                if j > 0 && j < rows - 1 {
-                    data[k + TerrainField.gradY] = (data[k + cols * S] - data[k - cols * S]) / (2 * cell)
-                }
+        // gradient „kupoly“ oblasti (pre tieňovanie reliéfu)
+        @inline(__always) func hgt(_ k: Int) -> Float { min(max(data[k * S + TerrainField.sdf], 0), 40) * 0.012 }
+        for j in 1..<(rows - 1) {
+            for i in 1..<(cols - 1) {
+                let k = j * cols + i
+                data[k * S + TerrainField.gradX] = (hgt(k + 1) - hgt(k - 1)) / (2 * cell)
+                data[k * S + TerrainField.gradY] = (hgt(k + cols) - hgt(k - cols)) / (2 * cell)
             }
         }
-
-        computeSignedDistance(&data, cols: cols, rows: rows)
         return TerrainField(cols: cols, rows: rows, cell: cell, data: data)
-    }
-
-    /// Vzdialenosť od pobrežia v bodoch: subpixelové semienka z gradientu
-    /// a dvojpriechodový chamfer (8-okolie). Výsledok: rovnako široké pláže,
-    /// plytčiny a vlny okolo každého ostrova.
-    private static func computeSignedDistance(_ data: inout [Float], cols: Int, rows: Int) {
-        let S = TerrainField.stride
-        let n = cols * rows
-        let inf: Float = 1e9
-        var dist = [Float](repeating: inf, count: n)
-        var positive = [Bool](repeating: false, count: n)
-        for k in 0..<n { positive[k] = data[k * S] >= Band.shore }
-
-        for j in 0..<rows {
-            for i in 0..<cols {
-                let k = j * cols + i
-                let p = positive[k]
-                let edge = (i > 0 && positive[k - 1] != p) || (i < cols - 1 && positive[k + 1] != p)
-                    || (j > 0 && positive[k - cols] != p) || (j < rows - 1 && positive[k + cols] != p)
-                if edge {
-                    let s = data[k * S] - Band.shore
-                    let gx = data[k * S + TerrainField.gradX], gy = data[k * S + TerrainField.gradY]
-                    let g = max((gx * gx + gy * gy).squareRoot(), 1e-4)
-                    dist[k] = min(abs(s) / g, cell * 1.5)
-                }
-            }
-        }
-
-        let a = cell, b = cell * 2.0.squareRoot().asFloat
-        for j in 0..<rows {
-            for i in 0..<cols {
-                let k = j * cols + i
-                var d = dist[k]
-                if i > 0 { d = min(d, dist[k - 1] + a) }
-                if j > 0 {
-                    d = min(d, dist[k - cols] + a)
-                    if i > 0 { d = min(d, dist[k - cols - 1] + b) }
-                    if i < cols - 1 { d = min(d, dist[k - cols + 1] + b) }
-                }
-                dist[k] = d
-            }
-        }
-        for j in stride(from: rows - 1, through: 0, by: -1) {
-            for i in stride(from: cols - 1, through: 0, by: -1) {
-                let k = j * cols + i
-                var d = dist[k]
-                if i < cols - 1 { d = min(d, dist[k + 1] + a) }
-                if j < rows - 1 {
-                    d = min(d, dist[k + cols] + a)
-                    if i < cols - 1 { d = min(d, dist[k + cols + 1] + b) }
-                    if i > 0 { d = min(d, dist[k + cols - 1] + b) }
-                }
-                dist[k] = d
-            }
-        }
-        for k in 0..<n {
-            data[k * S + TerrainField.sdf] = positive[k] ? dist[k] : -dist[k]
-        }
     }
 
     // MARK: - Render
@@ -214,29 +145,34 @@ enum TerrainRenderer {
     static func render(size: CGSize, scale: CGFloat, icons: [CGRect], theme: Theme) -> RenderedScene? {
         guard size.width > 0, size.height > 0 else { return nil }
         let field = buildField(size: size, icons: icons, theme: theme)
+        guard let ctx = renderPixels(field: field, size: size, scale: scale, theme: theme) else { return nil }
 
-        guard let terrainCtx = renderTerrain(field: field, size: size, scale: scale, theme: theme) else { return nil }
+        // Vektorová vrstva v bodoch: budovy → chodníky → flóra a drobnosti
+        ctx.saveGState()
+        ctx.scaleBy(x: scale, y: scale)
+        if theme.backdrop == .city {
+            CityPainter.draw(in: ctx, size: size, field: field)
+        }
+        let paths = theme.showPaths ? PathPlanner.plan(field: field, icons: icons, overWater: theme.hasSea) : []
+        Decorator.drawPaths(paths, in: ctx, theme: theme)
+        Decorator.draw(in: ctx, size: size, field: field, icons: icons, paths: paths, theme: theme)
+        ctx.restoreGState()
+        guard let terrain = ctx.makeImage() else { return nil }
 
-        // Chodníky, mosty a flóra – vektorovo v bodoch
-        terrainCtx.saveGState()
-        terrainCtx.scaleBy(x: scale, y: scale)
-        let paths = theme.showPaths ? PathPlanner.plan(field: field, icons: icons) : []
-        Decorator.drawPaths(paths, in: terrainCtx, theme: theme)
-        Decorator.draw(in: terrainCtx, size: size, field: field, icons: icons, paths: paths, theme: theme)
-        terrainCtx.restoreGState()
-
-        guard let terrain = terrainCtx.makeImage() else { return nil }
-
-        // Masky stačia v polovičnom rozlíšení (sú mäkké), šetrí to pamäť
-        let maskScale = max(0.5, scale * 0.5)
-        guard let masks = renderMasks(field: field, size: size, scale: maskScale) else { return nil }
-
-        return RenderedScene(terrain: terrain, waterMask: masks.water, foamMask: masks.foam,
-                             waveMasks: masks.waves,
-                             swimSpots: findSwimSpots(field: field, size: size, icons: icons, theme: theme))
+        var water: CGImage, foam: CGImage, waves: [CGImage]
+        if theme.hasSea {
+            guard let m = renderMasks(field: field, size: size, scale: max(0.5, scale * 0.5)) else { return nil }
+            (water, foam, waves) = (m.water, m.foam, m.waves)
+        } else {
+            guard let empty = makeContext(1, 1)?.makeImage() else { return nil }
+            (water, foam, waves) = (empty, empty, Array(repeating: empty, count: Waves.depths.count))
+        }
+        return RenderedScene(terrain: terrain, waterMask: water, foamMask: foam, waveMasks: waves,
+                             swimSpots: theme.swimmers == .none ? [] : findSwimSpots(field: field, size: size, icons: icons),
+                             carRoutes: theme.cars ? findCarRoutes(field: field, size: size) : [])
     }
 
-    private static func renderTerrain(field: TerrainField, size: CGSize, scale: CGFloat, theme t: Theme) -> CGContext? {
+    private static func renderPixels(field: TerrainField, size: CGSize, scale: CGFloat, theme t: Theme) -> CGContext? {
         let width = max(1, Int((size.width * scale).rounded()))
         let height = max(1, Int((size.height * scale).rounded()))
         guard let ctx = makeContext(width, height),
@@ -248,10 +184,7 @@ enum TerrainRenderer {
         let W = Float(size.width), H = Float(size.height)
         let cols = field.cols, rows = field.rows, cell = field.cell
         let S = TerrainField.stride
-        let L = light
-        let bw = t.beachWidth
 
-        // predpočítané stĺpce
         var colIndex = [Int](repeating: 0, count: width)
         var colFrac = [Float](repeating: 0, count: width)
         for c in 0..<width {
@@ -262,8 +195,7 @@ enum TerrainRenderer {
 
         field.data.withUnsafeBufferPointer { d in
             for row in 0..<height {
-                // riadok 0 v pamäti = horný okraj obrázka
-                let y = (Float(height - 1 - row) + 0.5) * inv
+                let y = (Float(height - 1 - row) + 0.5) * inv      // riadok 0 v pamäti = horný okraj
                 let gy = min(max(y / cell, 0), Float(rows - 1) - 0.001)
                 let iy = Int(gy), fy = gy - Float(iy)
                 let vy = (y / H - 0.5) * 2
@@ -281,46 +213,13 @@ enum TerrainRenderer {
                         let q = d[b01 + c] + (d[b11 + c] - d[b01 + c]) * fx
                         return p + (q - p) * fy
                     }
-                    let sdf = ch(TerrainField.sdf)
-                    let det = ch(TerrainField.detail)
-                    let m = ch(TerrainField.micro)
+                    var s = Sample(x: x, y: y, H: H,
+                                   sdf: ch(TerrainField.sdf), calm: ch(TerrainField.calm),
+                                   detail: ch(TerrainField.detail), micro: ch(TerrainField.micro),
+                                   large: ch(TerrainField.large),
+                                   gx: ch(TerrainField.gradX), gy: ch(TerrainField.gradY))
 
-                    // --- voda
-                    let depth = max(-sdf, 0)
-                    let t1 = 1 - expf(-depth / 45)
-                    let t2 = 1 - expf(-depth / 230)
-                    var wc = t.shallow.mix(t.deep, t1).mix(t.deepest, t2 * 0.85)
-                    wc = wc.offset((m - 0.5) * 0.06 * (1 - t1))
-                    wc = wc.offset((det - 0.5) * 0.05 * t1)          // jemné žíhanie hlbokej vody
-                    let sd = (depth - 24) / 3.2
-                    wc = wc.mix(t.shelf, expf(-sd * sd) * 0.22)
-                    wc = wc.mix(t.lip, clamp01(1 - depth / 2.6) * t.lipAlpha)
-                    wc = wc.mix(t.shelf, (y / H) * 0.07)
-
-                    // --- pevnina
-                    var c = wc
-                    let landA = clamp01(sdf / 0.6 + 0.5)
-                    if landA > 0 {
-                        let inland = max(sdf, 0)
-                        // pod ikonou sa textúra utlmí, farba ostáva – žiadne „vyrezané“ plochy
-                        let calm = 1 - 0.6 * ch(TerrainField.clear)
-                        var lc = t.land.mix(t.landAlt, sstep(0.36, 0.64, det) * calm).offset((m - 0.5) * t.microAmount * calm)
-                        let sandc = t.sand.mix(t.wetSand, clamp01(1 - inland / 3.5) * 0.55).offset((m - 0.5) * 0.03)
-                        lc = sandc.mix(lc, sstep(bw - 2, bw + 3, inland))
-
-
-                        // tieňovanie reliéfu
-                        let nx = -ch(TerrainField.gradX) * 22, ny = -ch(TerrainField.gradY) * 22
-                        let nl = (nx * nx + ny * ny + 1).squareRoot()
-                        var sh = (nx * L.x + ny * L.y + L.z) / nl - L.z
-                        sh = min(max(sh * t.shadeStrength, -0.35), 0.35)
-                        if sh > 0 {
-                            lc = lc.scaled(1 + sh * 1.1)
-                        } else {
-                            lc = lc.mix(lc.mul(t.shadowTint).scaled(1.6), -sh * 1.6)
-                        }
-                        c = wc.mix(lc, landA)
-                    }
+                    var c = Painters.compose(&s, theme: t, field: field)
 
                     // vinetácia podľa pomeru strán + zrno
                     let vx = (x / W - 0.5) * 2
@@ -366,7 +265,6 @@ enum TerrainRenderer {
                     continue
                 }
                 let depth = max(-sdf, 0)
-                // biela, premultiplikovaná → všetky štyri zložky rovnaké
                 @inline(__always) func put(_ i: Int, _ v: Float) {
                     let a = byte(v)
                     let b = buffers[i]
@@ -385,16 +283,10 @@ enum TerrainRenderer {
         return (images[0], images[1], Array(images[2...]))
     }
 
-    /// Miesta pre lodičky (Pláž) a kačky (Lúka): obrazovka sa rozdelí na rovnako
-    /// široké pásy a v každom sa vyberie najotvorenejšia voda. Okraje (Dock dole,
-    /// menu bar hore, Dock po bokoch) sa vynechávajú.
-    private static func findSwimSpots(field: TerrainField, size: CGSize, icons: [CGRect], theme: Theme) -> [CGPoint] {
-        let radius: CGFloat
-        switch theme.swimmers {
-        case .none: return []
-        case .sailboats: radius = 46
-        case .ducks: radius = 30
-        }
+    /// Lodičky: obrazovka sa rozdelí na rovnako široké pásy a v každom sa vyberie
+    /// najotvorenejšia voda. Okraje (Dock, menu bar) sa vynechávajú.
+    private static func findSwimSpots(field: TerrainField, size: CGSize, icons: [CGRect]) -> [CGPoint] {
+        let radius: CGFloat = 46
         let count = max(1, Int(size.width / 1500))
         let minX: CGFloat = 90, maxX = size.width - 90
         let minY: CGFloat = 160, maxY = size.height - 80
@@ -402,7 +294,6 @@ enum TerrainRenderer {
         let band = (maxX - minX) / CGFloat(count)
         let step: CGFloat = 24
         var spots: [CGPoint] = []
-
         for c in 0..<count {
             var best: CGPoint?
             var bestScore: Float = 0
@@ -415,7 +306,6 @@ enum TerrainRenderer {
                     let center = field.sdf(p)
                     guard center < -(Float(radius) + 16) else { continue }
                     if icons.contains(where: { $0.insetBy(dx: -150, dy: -150).contains(p) }) { continue }
-                    // najmenšia vzdialenosť od brehu na celej dráhe = skóre
                     var worst = -center
                     for k in 0..<16 {
                         let a = CGFloat(k) / 16 * 2 * .pi
@@ -434,6 +324,38 @@ enum TerrainRenderer {
         return spots
     }
 
+    /// Úseky ulíc mimo parkov (dosť dlhé na to, aby nimi prešlo auto).
+    private static func findCarRoutes(field: TerrainField, size: CGSize) -> [(CGPoint, CGPoint)] {
+        var routes: [(CGPoint, CGPoint)] = []
+        let bw = CGFloat(CityGrid.blockW), bh = CGFloat(CityGrid.blockH)
+        let step: CGFloat = 20
+        func scan(_ points: [CGPoint]) {
+            var start: CGPoint?
+            var last: CGPoint?
+            for p in points {
+                if field.sdf(p) < -12 {
+                    if start == nil { start = p }
+                    last = p
+                } else {
+                    if let s = start, let l = last, hypot(l.x - s.x, l.y - s.y) >= 240 { routes.append((s, l)) }
+                    start = nil
+                }
+            }
+            if let s = start, let l = last, hypot(l.x - s.x, l.y - s.y) >= 240 { routes.append((s, l)) }
+        }
+        var y = bh
+        while y < size.height - 40 {
+            scan(stride(from: 0, through: size.width, by: step).map { CGPoint(x: $0, y: y) })
+            y += bh
+        }
+        var x = bw
+        while x < size.width {
+            scan(stride(from: 0, through: size.height, by: step).map { CGPoint(x: x, y: $0) })
+            x += bw
+        }
+        return routes
+    }
+
     @inline(__always)
     static func byte(_ v: Float) -> UInt8 { UInt8(clamp01(v) * 255 + 0.5) }
 
@@ -442,8 +364,4 @@ enum TerrainRenderer {
         return CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
                          space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
     }
-}
-
-private extension Double {
-    var asFloat: Float { Float(self) }
 }

@@ -1,30 +1,24 @@
 import CoreGraphics
 
-/// Rozmiestňuje a kreslí flóru, kamene a drobnosti. Nikdy nie na ikony ani na chodníky.
-/// Svetlo prichádza zhora zľava, tiene padajú doprava dole.
+/// Rozmiestňuje a kreslí vektorové prvky podľa témy. Nikdy nie na ikony ani na chodníky.
+/// Svetlo prichádza zhora zľava, tiene padajú doprava dole. 1:1 s tools/terrain_preview.py.
 enum Decorator {
     private enum Kind {
-        case tree, palm, pine, bush, bushFlowers, rock, rockSnowy, rockInWater, lily
-        case tuft, flowers, starfish, reeds, crack
+        case tree, palm, pine, bush, umbrella, starfish, shell, house, hay
 
         var baseSize: CGFloat {
             switch self {
-            case .palm: return 32
-            case .tree: return 36
-            case .pine: return 32
-            case .bush, .bushFlowers: return 17
-            case .rock: return 14
-            case .rockSnowy: return 15
-            case .rockInWater: return 13
-            case .lily: return 13
-            case .tuft, .starfish: return 6
-            case .flowers: return 7
-            case .reeds: return 12
-            case .crack: return 14
+            case .pine: return 26
+            case .umbrella: return 16
+            case .starfish: return 6
+            case .shell: return 5
+            case .palm: return 30
+            case .bush: return 16
+            case .house: return 20
+            case .hay: return 9
+            case .tree: return 22
             }
         }
-
-        var isTall: Bool { self == .tree || self == .pine || self == .palm }
     }
 
     private struct Item {
@@ -34,22 +28,28 @@ enum Decorator {
         let seed: Int32
     }
 
-    /// Prechody a farby pripravené raz na celé prekreslenie.
+    /// Prechody pripravené raz na celé prekreslenie.
     private struct Kit {
         let theme: Theme
-        let shadow: CGGradient
+        let shadow30: CGGradient
+        let shadow22: CGGradient
+        let shadow28: CGGradient
+        let shadow35: CGGradient
         let blob: CGGradient
         let leafBack: CGGradient
         let leafFront: CGGradient
-        let lily: CGGradient
+        let hay: CGGradient
 
         init(_ t: Theme) {
             theme = t
-            shadow = Decorator.gradient([RGB.black.cg(0.30), RGB.black.cg(0.21), RGB.black.cg(0)], [0, 0.55, 1])
+            func shadow(_ a: CGFloat) -> CGGradient {
+                Decorator.gradient([RGB.black.cg(a), RGB.black.cg(a * 0.7), RGB.black.cg(0)], [0, 0.55, 1])
+            }
+            shadow30 = shadow(0.30); shadow22 = shadow(0.22); shadow28 = shadow(0.28); shadow35 = shadow(0.35)
             blob = Decorator.gradient([t.foliageLight.cg(), t.foliageMid.cg(), t.foliageDark.cg()], [0, 0.45, 1])
             leafBack = Decorator.gradient([t.foliageDark.cg(), t.foliageMid.cg()], [0, 1])
             leafFront = Decorator.gradient([t.foliageMid.cg(), t.foliageLight.cg(), t.foliageMid.cg()], [0, 0.6, 1])
-            lily = Decorator.gradient([t.foliageLight.cg(), t.foliageMid.cg()], [0, 1])
+            hay = Decorator.gradient([RGB(0xF1D98B).cg(), RGB(0xC9A44E).cg()], [0, 1])
         }
     }
 
@@ -60,33 +60,17 @@ enum Decorator {
     }
 
     @inline(__always)
-    private static func h(_ a: Int32, _ b: Int32, _ salt: UInt32) -> CGFloat {
-        CGFloat(hash2(a, b, salt))
-    }
+    private static func h(_ a: Int32, _ b: Int32, _ salt: UInt32) -> CGFloat { CGFloat(hash2(a, b, salt)) }
 
     // MARK: - Rozmiestnenie
 
     static func draw(in ctx: CGContext, size: CGSize, field: TerrainField, icons: [CGRect],
                      paths: [PathSegment], theme t: Theme) {
         let pathPoints = paths.flatMap { $0.points }
-
-        func blocked(_ p: CGPoint, _ rad: CGFloat) -> Bool {
-            for r in icons where p.x > r.minX - rad && p.x < r.maxX + rad && p.y > r.minY - rad && p.y < r.maxY + rad {
-                return true
-            }
-            let lim = (rad * 0.8 + 6) * (rad * 0.8 + 6)
-            for q in pathPoints where (q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y) < lim {
-                return true
-            }
-            return false
-        }
-
         let seed = t.seed
+        let g: CGFloat = t.id == .zima ? 21 : 30
         var items: [Item] = []
-        var ground: [Item] = []
 
-        // Veľké prvky – mriežka 40 bodov, hustota podľa „hájového“ šumu
-        let g: CGFloat = 30
         for j in 0..<(Int(size.height / g) + 2) {
             for i in 0..<(Int(size.width / g) + 2) {
                 let ii = Int32(i), jj = Int32(j)
@@ -96,103 +80,56 @@ enum Decorator {
                 let sz = h(ii, jj, seed &+ 53)
                 let sid = Int32(h(ii, jj, seed &+ 61) * 1e6)
                 let sd = CGFloat(field.sdf(p))
-                let land = sd > 0
                 let dens = CGFloat(sstep(0.38, 0.62, field.detail(p)))
-                let bw = CGFloat(t.beachWidth)
 
                 var kind: Kind?
                 switch t.id {
-                case .beach:
-                    if land && sd > bw * 0.6 && roll < 0.35 + 0.5 * dens {
-                        kind = roll < 0.1 + 0.45 * dens ? .palm : .bush
-                    } else if land && sd > 3 && roll < 0.5 {
-                        kind = .bush
-                    } else if sd > -40 && sd < -8 && roll < 0.05 {
-                        kind = .rockInWater
-                    }
-                case .meadow:
-                    if land && sd > 5 && roll < 0.35 + 0.5 * dens {
-                        kind = roll < 0.05 + 0.55 * dens ? .tree : .bushFlowers
-                    } else if sd > -30 && sd < -6 && roll < 0.12 {
-                        kind = .lily
-                    } else if land && roll < 0.03 {
-                        kind = .rock
-                    }
-                case .winter:
-                    if land && sd > 4 && roll < 0.35 + 0.5 * dens {
-                        kind = .pine
-                    } else if land && roll < 0.16 + 0.72 * dens {
-                        kind = .rockSnowy
-                    }
+                case .plaz:
+                    if sd > 18 && roll < 0.05 { kind = .umbrella }
+                    else if sd > 2 && sd < 14 && roll < 0.1 { kind = roll < 0.05 ? .starfish : .shell }
+                    else if sd > 10 && sd < 40 && roll > 0.9 { kind = .palm }
+                case .ostrovy:
+                    if sd > 9 && roll < 0.35 + 0.5 * dens { kind = roll < 0.1 + 0.45 * dens ? .palm : .bush }
+                case .polia:
+                    if sd > -60 && sd < -14 && roll < 0.035 { kind = .house }
+                    else if sd < -10 && roll < 0.06 {
+                        let crop = Int(worley(Float(p.x), Float(p.y), cell: Painters.fieldCell, seed: seed &+ 60, jitter: 0.9).id * 7)
+                        if crop == 0 || crop == 6 { kind = .hay }                  // pšenica, strnisko
+                    } else if sd > 6 && roll < 0.08 { kind = .tree }
+                case .mesto:
+                    if sd > 6 && roll < 0.3 + 0.3 * dens { kind = .tree }
+                case .les:
+                    if sd < -16 && roll < 0.02 && field.large(p) < 0.45 { kind = .tree }   // osamelé stromy na lúkach
+                case .zima:
+                    if sd < -3 && roll < 0.93 { kind = .pine }
                 }
                 guard let k = kind else { continue }
                 let s = k.baseSize * (0.8 + 0.45 * sz)
-                // celý obrys (kmeň aj koruna) mimo rámikov ikon
-                let box = CGRect(x: p.x - s * 0.6, y: p.y - s * 0.3, width: s * 1.2, height: s * 1.45).insetBy(dx: -5, dy: -5)
-                if icons.contains(where: { $0.intersects(box) }) || blocked(p, 0) { continue }
+                let box = CGRect(x: p.x - s * 0.7 - 5, y: p.y - s * 0.5 - 5, width: s * 1.4 + 10, height: s * 1.7 + 10)
+                if icons.contains(where: { $0.intersects(box) }) { continue }
+                if pathPoints.contains(where: { hypot($0.x - p.x, $0.y - p.y) < 6 }) { continue }
                 items.append(Item(p: p, kind: k, s: s, seed: sid))
             }
         }
 
-        // Drobnosti na zemi – jemnejšia mriežka 20 bodov
-        let gg: CGFloat = 20
-        for j in 0..<(Int(size.height / gg) + 2) {
-            for i in 0..<(Int(size.width / gg) + 2) {
-                let ii = Int32(i), jj = Int32(j)
-                let p = CGPoint(x: (CGFloat(i) + 0.1 + 0.8 * h(ii, jj, seed &+ 71)) * gg,
-                                y: (CGFloat(j) + 0.1 + 0.8 * h(ii, jj, seed &+ 83)) * gg)
-                let roll = h(ii, jj, seed &+ 97)
-                let sid = Int32(h(ii, jj, seed &+ 101) * 1e6)
-                let sd = CGFloat(field.sdf(p))
-                let bw = CGFloat(t.beachWidth)
-
-                var kind: Kind?
-                switch t.id {
-                case .beach:
-                    if sd > 2 && sd < bw - 3 && roll < 0.035 { kind = .starfish }
-                    else if sd > bw + 4 && roll < 0.22 { kind = .tuft }
-                case .meadow:
-                    if sd > -6 && sd < 7 && roll < (sd > 0 ? 0.35 : 0.25) { kind = .reeds }
-                    else if sd > 8 && roll < 0.16 { kind = .flowers }
-                    else if sd > 8 && roll < 0.42 { kind = .tuft }
-                case .winter:
-                    if sd < -20 && roll < 0.012 { kind = .crack }
-                }
-                guard let k = kind else { continue }
-                if blocked(p, k == .crack ? 2 : 3) { continue }
-                ground.append(Item(p: p, kind: k, s: k.baseSize, seed: sid))
-            }
-        }
-
         let kit = Kit(t)
-        for it in ground { drawItem(it, ctx, kit) }
-
         items.sort { $0.p.y > $1.p.y }
-        // najprv všetky tiene, aby nepadali cez susedné koruny
-        for it in items where it.kind != .lily {
-            let rx = it.s * (it.kind.isTall ? 0.62 : 0.45)
-            let dx = it.s * (it.kind.isTall ? 0.38 : 0.12)
-            softShadow(ctx, kit, CGPoint(x: it.p.x + dx, y: it.p.y - it.s * 0.08), rx, rx * 0.42)
+        for it in items where [.tree, .palm, .bush, .pine].contains(it.kind) {
+            softShadow(ctx, it.kind == .pine ? kit.shadow22 : kit.shadow30,
+                       CGPoint(x: it.p.x + it.s * 0.38, y: it.p.y - it.s * 0.08), it.s * 0.62, it.s * 0.26)
         }
-        for it in items { drawItem(it, ctx, kit) }
-    }
-
-    private static func drawItem(_ it: Item, _ ctx: CGContext, _ kit: Kit) {
-        switch it.kind {
-        case .tree: tree(ctx, kit, it)
-        case .palm: palm(ctx, kit, it)
-        case .pine: pine(ctx, kit, it, snowy: kit.theme.id == .winter)
-        case .bush: bush(ctx, kit, it, flowers: false)
-        case .bushFlowers: bush(ctx, kit, it, flowers: true)
-        case .rock: rock(ctx, kit, it, snowy: false, foam: false)
-        case .rockSnowy: rock(ctx, kit, it, snowy: true, foam: false)
-        case .rockInWater: rock(ctx, kit, it, snowy: false, foam: true)
-        case .lily: lily(ctx, kit, it)
-        case .tuft: tuft(ctx, kit, it)
-        case .flowers: flowers(ctx, kit, it)
-        case .starfish: starfish(ctx, kit, it)
-        case .reeds: reeds(ctx, kit, it)
-        case .crack: crack(ctx, it)
+        for it in items {
+            switch it.kind {
+            case .tree: tree(ctx, kit, it)
+            case .palm: palm(ctx, kit, it)
+            case .pine: pine(ctx, kit, it)
+            case .bush: bush(ctx, kit, it)
+            case .umbrella: umbrella(ctx, kit, it)
+            case .starfish: starfish(ctx, it)
+            case .shell: shell(ctx, it)
+            case .house: house(ctx, kit, it)
+            case .hay: haybale(ctx, kit, it)
+            }
         }
     }
 
@@ -202,16 +139,15 @@ enum Decorator {
         ctx.fillEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
     }
 
-    private static func softShadow(_ ctx: CGContext, _ kit: Kit, _ c: CGPoint, _ rx: CGFloat, _ ry: CGFloat) {
+    private static func softShadow(_ ctx: CGContext, _ g: CGGradient, _ c: CGPoint, _ rx: CGFloat, _ ry: CGFloat) {
         ctx.saveGState()
         ctx.translateBy(x: c.x, y: c.y)
         ctx.scaleBy(x: 1, y: ry / rx)
-        ctx.drawRadialGradient(kit.shadow, startCenter: .zero, startRadius: 0,
-                               endCenter: .zero, endRadius: rx, options: [])
+        ctx.drawRadialGradient(g, startCenter: .zero, startRadius: 0, endCenter: .zero, endRadius: rx, options: [])
         ctx.restoreGState()
     }
 
-    /// Guľa osvetlená zľava zhora – základ korún stromov a kríkov.
+    /// Guľa osvetlená zľava zhora – koruny stromov a kríkov.
     private static func shadedBlob(_ ctx: CGContext, _ kit: Kit, _ c: CGPoint, _ r: CGFloat) {
         ctx.saveGState()
         ctx.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
@@ -223,53 +159,38 @@ enum Decorator {
         ctx.restoreGState()
     }
 
-    // MARK: - Tvary
+    // MARK: - Flóra
 
     private static func tree(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
-        let t = kit.theme, x = it.p.x, y = it.p.y, s = it.s
-        let R = s * 0.44
-        ctx.setFillColor(t.trunkDark.cg())
-        ctx.fill(CGRect(x: x - s * 0.06, y: y, width: s * 0.12, height: s * 0.32))
+        let x = it.p.x, y = it.p.y, s = it.s, R = s * 0.44
+        ctx.setFillColor(kit.theme.trunkDark.cg())
+        ctx.fill(CGRect(x: x - s * 0.06, y: y, width: s * 0.12, height: s * 0.3))
         let blobs: [(CGFloat, CGFloat, CGFloat)] = [(-0.48, -0.22, 0.68), (0.46, -0.18, 0.7), (0.05, 0.32, 0.66), (0, 0, 1.0)]
-        for (k, b) in blobs.enumerated() {
-            let j = h(Int32(k), it.seed, 5) * 0.15
-            shadedBlob(ctx, kit, CGPoint(x: x + b.0 * R, y: y + s * 0.62 + b.1 * R + j * R), R * b.2 * (0.92 + j))
-        }
-        ctx.setFillColor(t.foliageLight.cg(0.55))
-        for k in 0..<3 {
-            let a = 2.2 + CGFloat(k) * 0.35, rr = R * (0.45 + 0.12 * CGFloat(k))
-            circle(ctx, CGPoint(x: x + cos(a) * rr * 0.6, y: y + s * 0.62 + sin(a) * rr * 0.6), s * 0.035)
+        for b in blobs {
+            shadedBlob(ctx, kit, CGPoint(x: x + b.0 * R, y: y + s * 0.62 + b.1 * R), R * b.2)
         }
     }
 
     private static func palm(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
         let t = kit.theme, x = it.p.x, y = it.p.y, s = it.s
-        let lean = (h(it.seed, 1, 9) - 0.5) * 0.5
-        let top = CGPoint(x: x + s * (0.18 + lean * 0.3), y: y + s * 0.95)
-        let ctrl = CGPoint(x: x + s * (0.02 + lean * 0.2), y: y + s * 0.55)
+        let top = CGPoint(x: x + s * 0.2, y: y + s * 0.95)
+        let ctrl = CGPoint(x: x + s * 0.03, y: y + s * 0.55)
         func q(_ t: CGFloat) -> CGPoint {
             let u = 1 - t
-            return CGPoint(x: u * u * x + 2 * u * t * ctrl.x + t * t * top.x,
-                           y: u * u * y + 2 * u * t * ctrl.y + t * t * top.y)
+            let a = u * u, b = 2 * u * t, c = t * t
+            return CGPoint(x: a * x + b * ctrl.x + c * top.x, y: a * y + b * ctrl.y + c * top.y)
         }
-        // kmeň z prstencov
         ctx.setLineCap(.round)
-        let rings = 8
-        for k in 0..<rings {
-            let t0 = CGFloat(k) / CGFloat(rings), t1 = CGFloat(k + 1) / CGFloat(rings)
+        for k in 0..<8 {
+            let t0 = CGFloat(k) / 8, t1 = CGFloat(k + 1) / 8
             ctx.setStrokeColor((k % 2 == 0 ? t.trunk : t.trunkDark).cg())
             ctx.setLineWidth(s * (0.14 - 0.06 * t0))
-            ctx.beginPath()
-            ctx.move(to: q(t0))
-            ctx.addLine(to: q(t1))
-            ctx.strokePath()
+            ctx.beginPath(); ctx.move(to: q(t0)); ctx.addLine(to: q(t1)); ctx.strokePath()
         }
-        // listy: zadná (tmavšia) a predná (svetlejšia) vrstva
-        let leaves = 7
         let base = h(it.seed, 2, 9) * 2 * .pi
         for layer in 0..<2 {
-            for k in 0..<leaves where k % 2 == layer {
-                let ang = base + CGFloat(k) / CGFloat(leaves) * 2 * .pi
+            for k in 0..<7 where k % 2 == layer {
+                let ang = base + CGFloat(k) / 7 * 2 * .pi
                 let L = s * 0.62 * (0.85 + 0.3 * h(it.seed, Int32(k), 3))
                 let w = s * 0.15, droop = s * 0.18
                 ctx.saveGState()
@@ -282,44 +203,27 @@ enum Decorator {
                 ctx.addCurve(to: .zero,
                              control1: CGPoint(x: L * 0.7, y: -w * 0.2), control2: CGPoint(x: L * 0.3, y: -w * 0.7))
                 ctx.closePath()
-                ctx.saveGState()
                 ctx.clip()
-                ctx.drawLinearGradient(layer == 0 ? kit.leafBack : kit.leafFront,
-                                       start: .zero, end: CGPoint(x: L, y: 0),
+                ctx.drawLinearGradient(layer == 0 ? kit.leafBack : kit.leafFront, start: .zero, end: CGPoint(x: L, y: 0),
                                        options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-                ctx.restoreGState()
-                // stredové rebro listu
-                ctx.setStrokeColor(t.foliageDark.cg(0.5))
-                ctx.setLineWidth(s * 0.018)
-                ctx.beginPath()
-                ctx.move(to: CGPoint(x: s * 0.03, y: 0))
-                ctx.addCurve(to: CGPoint(x: L * 0.97, y: -droop * 0.48),
-                             control1: CGPoint(x: L * 0.4, y: w * 0.25), control2: CGPoint(x: L * 0.75, y: 0))
-                ctx.strokePath()
                 ctx.restoreGState()
             }
         }
-        ctx.setFillColor(RGB(0x5A3A1E).cg())
-        for k in 0..<3 {
-            let a = base + CGFloat(k) * 2.1
-            circle(ctx, CGPoint(x: top.x + cos(a) * s * 0.06, y: top.y + sin(a) * s * 0.05), s * 0.05)
-        }
     }
 
-    private static func pine(_ ctx: CGContext, _ kit: Kit, _ it: Item, snowy: Bool) {
+    private static func pine(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
         let t = kit.theme, x = it.p.x, y = it.p.y, s = it.s
+        let snowy = t.id == .zima
         ctx.setFillColor(t.trunkDark.cg())
         ctx.fill(CGRect(x: x - s * 0.05, y: y, width: s * 0.1, height: s * 0.22))
-        let tiers = 4
         var apex = y
-        for k in 0..<tiers {
+        for k in 0..<4 {
             let kf = CGFloat(k)
             let by = y + s * (0.12 + 0.24 * kf)
             let half = s * (0.46 - 0.095 * kf)
             let ay = by + s * 0.46
             let sag = s * 0.05
             apex = ay
-            // ľavá polovica osvetlená, pravá v tieni
             for (side, color) in [(CGFloat(-1), t.foliageMid), (CGFloat(1), t.foliageDark)] {
                 ctx.beginPath()
                 ctx.move(to: CGPoint(x: x, y: ay))
@@ -346,183 +250,138 @@ enum Decorator {
                 ctx.fillPath()
             }
         }
-        if snowy {
-            let ay = apex
-            ctx.setFillColor(RGB.white.cg())
+        guard snowy else { return }
+        let ay = apex
+        ctx.setFillColor(RGB.white.cg())
+        ctx.beginPath()
+        ctx.move(to: CGPoint(x: x, y: ay))
+        ctx.addCurve(to: CGPoint(x: x - s * 0.11, y: ay - s * 0.13),
+                     control1: CGPoint(x: x - s * 0.06, y: ay - s * 0.06), control2: CGPoint(x: x - s * 0.1, y: ay - s * 0.11))
+        ctx.addCurve(to: CGPoint(x: x + s * 0.1, y: ay - s * 0.13),
+                     control1: CGPoint(x: x - s * 0.02, y: ay - s * 0.1), control2: CGPoint(x: x + s * 0.05, y: ay - s * 0.12))
+        ctx.addCurve(to: CGPoint(x: x, y: ay),
+                     control1: CGPoint(x: x + s * 0.07, y: ay - s * 0.08), control2: CGPoint(x: x + s * 0.03, y: ay - s * 0.04))
+        ctx.fillPath()
+    }
+
+    private static func bush(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
+        let x = it.p.x, y = it.p.y, s = it.s
+        let blobs: [(CGFloat, CGFloat, CGFloat)] = [(-0.24, 0.18, 0.3), (0.24, 0.2, 0.3), (0, 0.34, 0.36)]
+        for b in blobs { shadedBlob(ctx, kit, CGPoint(x: x + b.0 * s, y: y + b.1 * s), s * b.2) }
+    }
+
+    // MARK: - Pláž
+
+    private static func umbrella(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
+        let x = it.p.x, y = it.p.y, s = it.s
+        let canopy = [RGB(0xE4574B), RGB(0xF2B33D), RGB(0x3E8ED0), RGB(0x2BB39B)][Int(h(it.seed, 1, 1) * 4) % 4]
+        let towel = [RGB(0xFFFFFF), RGB(0xF6C744), RGB(0x7FC8F8)][Int(h(it.seed, 3, 3) * 3) % 3]
+        // uterák
+        ctx.saveGState()
+        ctx.translateBy(x: x + s * 0.55, y: y - s * 0.35)
+        ctx.rotate(by: (h(it.seed, 2, 2) - 0.5) * 0.8)
+        ctx.setFillColor(towel.cg())
+        ctx.fill(CGRect(x: -s * 0.22, y: -s * 0.45, width: s * 0.44, height: s * 0.9))
+        ctx.setFillColor(RGB(0xE4574B).cg(0.8))
+        for k in 0..<3 { ctx.fill(CGRect(x: -s * 0.22, y: -s * 0.3 + CGFloat(k) * s * 0.3, width: s * 0.44, height: s * 0.08)) }
+        ctx.restoreGState()
+        softShadow(ctx, kit.shadow28, CGPoint(x: x + s * 0.25, y: y - s * 0.2), s * 0.62, s * 0.5)
+        // slnečník: 8 dielov
+        for k in 0..<8 {
+            let a0 = CGFloat(k) / 8 * 2 * .pi, a1 = CGFloat(k + 1) / 8 * 2 * .pi
             ctx.beginPath()
-            ctx.move(to: CGPoint(x: x, y: ay))
-            ctx.addCurve(to: CGPoint(x: x - s * 0.11, y: ay - s * 0.13),
-                         control1: CGPoint(x: x - s * 0.06, y: ay - s * 0.06), control2: CGPoint(x: x - s * 0.1, y: ay - s * 0.11))
-            ctx.addCurve(to: CGPoint(x: x + s * 0.1, y: ay - s * 0.13),
-                         control1: CGPoint(x: x - s * 0.02, y: ay - s * 0.1), control2: CGPoint(x: x + s * 0.05, y: ay - s * 0.12))
-            ctx.addCurve(to: CGPoint(x: x, y: ay),
-                         control1: CGPoint(x: x + s * 0.07, y: ay - s * 0.08), control2: CGPoint(x: x + s * 0.03, y: ay - s * 0.04))
+            ctx.move(to: it.p)
+            ctx.addArc(center: it.p, radius: s * 0.5, startAngle: a0, endAngle: a1, clockwise: false)
+            ctx.closePath()
+            ctx.setFillColor((k % 2 == 0 ? canopy : RGB.white).cg())
             ctx.fillPath()
         }
+        ctx.setStrokeColor(RGB.black.cg(0.15))
+        ctx.setLineWidth(0.6)
+        ctx.strokeEllipse(in: CGRect(x: x - s * 0.5, y: y - s * 0.5, width: s, height: s))
+        ctx.setFillColor(RGB(0x5A3A1E).cg())
+        circle(ctx, it.p, s * 0.06)
     }
 
-    private static func bush(_ ctx: CGContext, _ kit: Kit, _ it: Item, flowers: Bool) {
-        let x = it.p.x, y = it.p.y, s = it.s
-        for b in [(CGFloat(-0.24), CGFloat(0.18), CGFloat(0.3)), (0.24, 0.2, 0.3), (0, 0.34, 0.36)] {
-            shadedBlob(ctx, kit, CGPoint(x: x + b.0 * s, y: y + b.1 * s), s * b.2)
-        }
-        let palette = kit.theme.flowers
-        guard flowers, !palette.isEmpty else { return }
-        ctx.setFillColor(palette[Int(h(it.seed, 0, 8) * CGFloat(palette.count)) % palette.count].cg())
-        for k in 0..<4 {
-            let a = h(it.seed, Int32(k), 4) * 2 * .pi, r = s * 0.28 * h(it.seed, Int32(k), 6)
-            circle(ctx, CGPoint(x: x + cos(a) * r, y: y + s * 0.32 + sin(a) * r), s * 0.045)
-        }
-    }
-
-    private static func rock(_ ctx: CGContext, _ kit: Kit, _ it: Item, snowy: Bool, foam: Bool) {
-        let t = kit.theme, x = it.p.x, y = it.p.y, s = it.s
-        let pts: [CGPoint] = (0..<7).map { k in
-            let a = CGFloat(k) / 7 * 2 * .pi, r = 0.85 + 0.3 * h(it.seed, Int32(k), 21)
-            return CGPoint(x: x + cos(a) * s * 0.5 * r, y: y + sin(a) * s * 0.34 * r)
-        }
-        if foam {
-            ctx.setStrokeColor(RGB.white.cg(0.45))
-            ctx.setLineWidth(1.6)
-            let rx = s * 0.66, ry = rx * 0.62
-            ctx.strokeEllipse(in: CGRect(x: x - rx, y: y - s * 0.04 - ry, width: rx * 2, height: ry * 2))
-        }
-        ctx.setFillColor(t.rock.cg())
-        ctx.beginPath()
-        ctx.addLines(between: pts)
-        ctx.closePath()
-        ctx.fillPath()
-        ctx.setFillColor(snowy ? RGB.white.cg(0.95) : t.rockLight.cg())
-        ctx.beginPath()
-        ctx.addLines(between: [CGPoint(x: x + s * 0.06, y: y + s * 0.06)] + Array(pts[2...5]))
-        ctx.closePath()
-        ctx.fillPath()
-    }
-
-    private static func tuft(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
-        let x = it.p.x, y = it.p.y, s = it.s
-        ctx.setStrokeColor(kit.theme.foliageDark.cg(0.75))
-        ctx.setLineWidth(0.9)
-        ctx.setLineCap(.round)
-        for k in 0..<4 {
-            let kf = CGFloat(k)
-            let a = .pi / 2 + (kf - 1.5) * 0.35 + (h(it.seed, Int32(k), 2) - 0.5) * 0.2
-            let L = s * (0.7 + 0.4 * h(it.seed, Int32(k), 3))
-            ctx.beginPath()
-            ctx.move(to: CGPoint(x: x + (kf - 1.5) * 0.8, y: y))
-            ctx.addLine(to: CGPoint(x: x + cos(a) * L, y: y + sin(a) * L))
-            ctx.strokePath()
-        }
-    }
-
-    private static func flowers(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
-        let palette = kit.theme.flowers
-        guard !palette.isEmpty else { return }
-        for k in 0..<6 {
-            let a = h(it.seed, Int32(k), 4) * 2 * .pi, r = it.s * h(it.seed, Int32(k), 6)
-            let c = CGPoint(x: it.p.x + cos(a) * r, y: it.p.y + sin(a) * r * 0.7)
-            ctx.setFillColor(RGB.black.cg(0.18))
-            circle(ctx, CGPoint(x: c.x + 0.5, y: c.y - 0.5), 1.6)
-            ctx.setFillColor(palette[Int(h(it.seed, Int32(k), 8) * CGFloat(palette.count)) % palette.count].cg())
-            circle(ctx, c, 1.5)
-        }
-    }
-
-    private static func starfish(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
+    private static func starfish(_ ctx: CGContext, _ it: Item) {
         let rot = h(it.seed, 1, 1) * 2 * .pi
         let pts: [CGPoint] = (0..<10).map { k in
             let a = rot + CGFloat(k) / 10 * 2 * .pi, r = it.s * (k % 2 == 0 ? 0.5 : 0.2)
             return CGPoint(x: it.p.x + cos(a) * r, y: it.p.y + sin(a) * r)
         }
-        ctx.setFillColor(kit.theme.accent.cg())
-        ctx.beginPath()
-        ctx.addLines(between: pts)
-        ctx.closePath()
-        ctx.fillPath()
+        ctx.setFillColor(RGB(0xF0806E).cg())
+        ctx.beginPath(); ctx.addLines(between: pts); ctx.closePath(); ctx.fillPath()
     }
 
-    private static func reeds(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
-        let x = it.p.x, y = it.p.y, s = it.s
-        ctx.setLineCap(.round)
-        for k in 0..<5 {
-            let kk = Int32(k)
-            let ox = CGFloat(k - 2) * s * 0.12 + (h(it.seed, kk, 1) - 0.5) * s * 0.1
-            let L = s * (0.7 + 0.5 * h(it.seed, kk, 2))
-            let bend = (h(it.seed, kk, 3) - 0.5) * s * 0.25
-            ctx.setStrokeColor(kit.theme.foliageMid.cg())
-            ctx.setLineWidth(1.0)
-            ctx.beginPath()
-            ctx.move(to: CGPoint(x: x + ox, y: y))
-            ctx.addCurve(to: CGPoint(x: x + ox + bend, y: y + L),
-                         control1: CGPoint(x: x + ox, y: y + L * 0.5), control2: CGPoint(x: x + ox + bend, y: y + L * 0.8))
-            ctx.strokePath()
-            if h(it.seed, kk, 4) < 0.5 {
-                ctx.setFillColor(RGB(0x6B4426).cg())
-                let c = CGPoint(x: x + ox + bend * 0.95, y: y + L * 0.88)
-                ctx.fillEllipse(in: CGRect(x: c.x - s * 0.045, y: c.y - s * 0.1, width: s * 0.09, height: s * 0.2))
-            }
-        }
-    }
-
-    private static func lily(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
-        let x = it.p.x, y = it.p.y, s = it.s
-        let a = h(it.seed, 1, 1) * 2 * .pi
-        ctx.setFillColor(RGB.black.cg(0.12))
-        ctx.fillEllipse(in: CGRect(x: x + 1 - s * 0.5, y: y - 1 - s * 0.4, width: s, height: s * 0.8))
-
+    private static func shell(_ ctx: CGContext, _ it: Item) {
+        let s = it.s
         ctx.saveGState()
-        ctx.translateBy(x: x, y: y)
-        ctx.scaleBy(x: 1, y: 0.8)
+        ctx.translateBy(x: it.p.x, y: it.p.y)
+        ctx.rotate(by: h(it.seed, 1, 1) * 2 * .pi)
+        ctx.setFillColor(RGB(0xF6E7D2).cg())
         ctx.beginPath()
         ctx.move(to: .zero)
-        ctx.addArc(center: .zero, radius: s * 0.5, startAngle: a + 0.35, endAngle: a - 0.35 + 2 * .pi, clockwise: false)
+        ctx.addArc(center: .zero, radius: s * 0.5, startAngle: 0, endAngle: .pi, clockwise: false)
         ctx.closePath()
-        ctx.clip()
-        ctx.drawRadialGradient(kit.lily, startCenter: CGPoint(x: -s * 0.15, y: s * 0.15), startRadius: 0,
-                               endCenter: .zero, endRadius: s * 0.5, options: [.drawsAfterEndLocation])
+        ctx.fillPath()
+        ctx.setStrokeColor(RGB(0xC9A27E).cg(0.8))
+        ctx.setLineWidth(0.5)
+        for k in 0..<5 {
+            let b = (CGFloat(k) + 0.5) / 5 * .pi
+            ctx.beginPath(); ctx.move(to: .zero); ctx.addLine(to: CGPoint(x: cos(b) * s * 0.48, y: sin(b) * s * 0.48)); ctx.strokePath()
+        }
         ctx.restoreGState()
+    }
 
-        if h(it.seed, 2, 2) < 0.35 {
-            ctx.setFillColor(RGB(0xF6B6C8).cg())
-            for k in 0..<6 {
-                let b = CGFloat(k) / 6 * 2 * .pi
-                ctx.saveGState()
-                ctx.translateBy(x: x + cos(b) * s * 0.12, y: y + sin(b) * s * 0.1)
-                ctx.rotate(by: b)
-                ctx.scaleBy(x: 1, y: 0.55)
-                circle(ctx, .zero, s * 0.13)
-                ctx.restoreGState()
-            }
-            ctx.setFillColor(RGB(0xFFD166).cg())
-            circle(ctx, it.p, s * 0.07)
+    // MARK: - Polia
+
+    private static func haybale(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
+        let x = it.p.x, y = it.p.y, s = it.s
+        softShadow(ctx, kit.shadow30, CGPoint(x: x + s * 0.3, y: y - s * 0.1), s * 0.6, s * 0.3)
+        ctx.saveGState()
+        ctx.addEllipse(in: CGRect(x: x - s * 0.5, y: y - s * 0.5, width: s, height: s))
+        ctx.clip()
+        ctx.drawRadialGradient(kit.hay, startCenter: CGPoint(x: x - s * 0.15, y: y + s * 0.15), startRadius: 0,
+                               endCenter: it.p, endRadius: s * 0.5, options: [.drawsAfterEndLocation])
+        ctx.restoreGState()
+        ctx.setStrokeColor(RGB(0xA9873B).cg(0.8))
+        ctx.setLineWidth(0.7)
+        for r: CGFloat in [0.15, 0.28, 0.4] {
+            ctx.beginPath()
+            ctx.addArc(center: it.p, radius: s * r, startAngle: 0, endAngle: 5.5, clockwise: false)
+            ctx.strokePath()
         }
     }
 
-    private static func crack(_ ctx: CGContext, _ it: Item) {
-        var pts = [it.p]
-        var a = h(it.seed, 0, 1) * 2 * .pi
-        for k in 0..<5 {
-            a += (h(it.seed, Int32(k), 2) - 0.5) * 1.4
-            let L = it.s * (0.4 + 0.6 * h(it.seed, Int32(k), 3))
-            let last = pts[pts.count - 1]
-            pts.append(CGPoint(x: last.x + cos(a) * L, y: last.y + sin(a) * L))
+    /// Domček zhora-spredu: sedlová strecha v dvoch tónoch, stena s oknami, komín, tieň.
+    private static func house(_ ctx: CGContext, _ kit: Kit, _ it: Item) {
+        let x = it.p.x, y = it.p.y, w = it.s, d = it.s * 0.7, wall = it.s * 0.3
+        let roof = [RGB(0xB5523B), RGB(0x8C5A3C), RGB(0x5E6B7A), RGB(0xC0703F)][Int(h(it.seed, 1, 5) * 4) % 4]
+        softShadow(ctx, kit.shadow35, CGPoint(x: x + w * 0.35, y: y - wall * 0.1), w * 0.75, d * 0.45)
+        ctx.setFillColor(RGB(0xEDE3D0).cg())
+        ctx.fill(CGRect(x: x - w / 2, y: y, width: w, height: wall))
+        ctx.setFillColor(RGB(0x6E8FB0).cg())
+        for k in 0..<3 {
+            ctx.fill(CGRect(x: x - w / 2 + w * (0.15 + CGFloat(k) * 0.28), y: y + wall * 0.3, width: w * 0.12, height: wall * 0.4))
         }
-        ctx.setLineJoin(.round)
-        ctx.setStrokeColor(RGB(0x3E5F80).cg(0.35))
-        ctx.setLineWidth(1.0)
-        ctx.beginPath()
-        ctx.addLines(between: pts.map { CGPoint(x: $0.x + 0.6, y: $0.y - 0.6) })
-        ctx.strokePath()
-        ctx.setStrokeColor(RGB.white.cg(0.7))
-        ctx.setLineWidth(0.8)
-        ctx.beginPath()
-        ctx.addLines(between: pts)
-        ctx.strokePath()
+        ctx.setFillColor(RGB(0x7A5533).cg())
+        ctx.fill(CGRect(x: x - w * 0.06, y: y, width: w * 0.12, height: wall * 0.6))
+        let top = y + wall, ridge = top + d * 0.5
+        ctx.setFillColor(roof.scaled(0.78).cg())
+        ctx.fill(CGRect(x: x - w / 2 - 1, y: top, width: w + 2, height: ridge - top))
+        ctx.setFillColor(roof.cg())
+        ctx.fill(CGRect(x: x - w / 2 - 1, y: ridge, width: w + 2, height: top + d - ridge))
+        ctx.setStrokeColor(RGB.black.cg(0.15))
+        ctx.setLineWidth(0.6)
+        ctx.beginPath(); ctx.move(to: CGPoint(x: x - w / 2 - 1, y: ridge)); ctx.addLine(to: CGPoint(x: x + w / 2 + 1, y: ridge)); ctx.strokePath()
+        ctx.setFillColor(RGB(0x8A6A5A).cg())
+        ctx.fill(CGRect(x: x + w * 0.22, y: ridge + d * 0.08, width: w * 0.1, height: d * 0.22))
     }
 
     // MARK: - Chodníky a mosty
 
     static func drawPaths(_ segments: [PathSegment], in ctx: CGContext, theme t: Theme) {
+        guard !segments.isEmpty else { return }
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
 
@@ -534,7 +393,6 @@ enum Decorator {
             ctx.setStrokeColor(t.path.cg())
             ctx.setLineWidth(7)
             ctx.beginPath(); ctx.addLines(between: p); ctx.strokePath()
-            // kamienky
             ctx.setFillColor(t.pathEdge.cg(0.5))
             for k in stride(from: 0, to: p.count, by: 3) where hash2(Int32(k), Int32(p.count), 41) < 0.5 {
                 let o = CGFloat(hash2(Int32(k), 1, 42) - 0.5) * 5
@@ -544,11 +402,9 @@ enum Decorator {
 
         for seg in segments where seg.isBridge && seg.points.count >= 2 {
             let p = seg.points
-            // tieň mosta na vode
             ctx.setStrokeColor(RGB.black.cg(0.22))
             ctx.setLineWidth(12)
             ctx.beginPath(); ctx.addLines(between: p.map { CGPoint(x: $0.x + 3, y: $0.y - 3) }); ctx.strokePath()
-            // paluba
             ctx.setStrokeColor(t.wood.cg())
             ctx.setLineWidth(9)
             ctx.beginPath(); ctx.addLines(between: p); ctx.strokePath()
@@ -559,7 +415,6 @@ enum Decorator {
                 let l = max(hypot(tx, ty), 0.0001)
                 return CGPoint(x: -ty / l, y: tx / l)
             }
-            // dosky
             ctx.setStrokeColor(t.woodDark.cg(0.8))
             ctx.setLineWidth(0.8)
             for k in 1..<max(1, p.count - 1) {
@@ -569,7 +424,6 @@ enum Decorator {
                 ctx.addLine(to: CGPoint(x: p[k].x + n.x * 4.5, y: p[k].y + n.y * 4.5))
                 ctx.strokePath()
             }
-            // zábradlie
             ctx.setStrokeColor(t.woodDark.cg())
             ctx.setLineWidth(1.3)
             for side: CGFloat in [-1, 1] {

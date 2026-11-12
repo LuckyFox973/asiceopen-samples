@@ -1,47 +1,27 @@
 # Krajinka (macOS) – prototyp
 
-Živá tapeta pre macOS. Prečíta, kde ležia ikony na ploche, a každému
-dokumentu vytvorí vlastný ostrov: piesok a palmy, lúku so stromami alebo
-zasnežený ostrov so smrekmi. Mimo dokumentov je voda, takže plocha zostáva
-prehľadná. Susedné dokumenty oddeľuje úzky prieliv.
+Živá tapeta pre macOS. Prečíta, kde ležia ikony na ploche, a pod dokumentmi
+vytvorí iný povrch než v okolí: piesok uprostred mora, oblaky nad lesom,
+pastvinu medzi poliami, park uprostred mesta alebo snehovú pláň v lese.
+Blízke dokumenty zdieľajú spoločnú oblasť. Mimo dokumentov takáto oblasť
+nikdy nevznikne.
 
-![Ostrov pre každý dokument](docs/islands-beach.jpg)
+![Šesť tém](docs/temy.jpg)
 
-| Lúka | Zima |
-|---|---|
-| ![](docs/islands-meadow.jpg) | ![](docs/islands-winter.jpg) |
-
-V menu sa dá zapnúť:
-- **Chodníky medzi dokumentmi** – cez prielivy vedú drevené mostíky.
-- **Ostrovy aj mimo ikon** – pôvodný režim s ostrovmi po celej ploche
-  (ukážky nižšie).
-
-![Pláž – detail](docs/crop-beach.jpg)
-
-| Lúka | Zima |
-|---|---|
-| ![](docs/crop-meadow.jpg) | ![](docs/crop-winter.jpg) |
-
-Ultrawide 5120×1440:
-
-![Ultrawide – Pláž](docs/ultrawide-beach.jpg)
-![Ultrawide – Lúka](docs/ultrawide-meadow.jpg)
-![Ultrawide – Zima](docs/ultrawide-winter.jpg)
-
-> Náhľady vyrenderoval `tools/terrain_preview.py`. Je to verný prepis
-> renderu do Pythonu (numpy + cairo), slúži na ladenie tém bez Macu. Modré
-> štvorce simulujú ikony.
-
-### Čo sa hýbe
-
-| | Pláž | Lúka | Zima |
+| Téma | Pod dokumentmi | Okolie | Animácie |
 |---|---|---|---|
-| Vlny bežiace k brehu, pena pri brehu | ✔ | jemné vlnky | – (ľad) |
-| Iskry a záblesky slnka na vode | ✔ | ✔ | trblietky na snehu |
-| Oblaky (tieň na zemi + biely závoj) | ✔ | ✔ | ✔ |
-| Kŕdle vtákov s tieňom | čajky | spevavce | vrany |
-| Na vode | plachetnice s brázdou | kačka s káčatkami | – |
-| Ďalšie | – | motýle | sneženie v dvoch hĺbkach |
+| Pláž | piesok, slnečníky, mušle, palmy | tyrkysové more | vlny, pena, záblesky, plachetnice, čajky |
+| Ostrovy | tráva s plážou, palmy | more | ako Pláž |
+| Les a oblaky | kopovité oblaky | les a lúky zhora | plávajúce oblaky, vtáky |
+| Polia | pastvina s plotom a kvetmi | parcely plodín, živé ploty, farmy, balíky slamy | oblaky, vtáky, motýle |
+| Mesto | park | ulice, domy a mrakodrapy s tieňmi | autá, oblaky, vtáky |
+| Zima | snehová pláň | hustý zasnežený les | sneženie, trblietky, vrany |
+
+V menu je navyše prepínač **Chodníky medzi dokumentmi** (pri mori s mostíkmi).
+
+> Náhľady vyrenderoval `tools/terrain_preview.py`. Je to verný prepis renderu
+> do Pythonu (numpy + cairo), slúži na ladenie tém bez Macu. Modré štvorce
+> simulujú ikony.
 
 ## Požiadavky
 

@@ -28,6 +28,7 @@ final class SceneView: NSView {
     private let foamLayer = CALayer()
     private let foamMaskLayer = CALayer()
     private let swimGroup = CALayer()
+    private let carGroup = CALayer()
     private let cloudShadows = CALayer()
     private let birdShadows = CALayer()
     private let critterGroup = CALayer()
@@ -60,7 +61,7 @@ final class SceneView: NSView {
             waveMaskLayers.append(CALayer())
         }
 
-        let all = [terrainLayer, animRoot, waterGroup, waterMaskLayer, foamLayer, foamMaskLayer, swimGroup,
+        let all = [terrainLayer, animRoot, waterGroup, waterMaskLayer, foamLayer, foamMaskLayer, swimGroup, carGroup,
                    cloudShadows, birdShadows, critterGroup, birdGroup, cloudWhites, weatherGroup]
             + waveLayers + waveMaskLayers
         for l in all {
@@ -78,7 +79,7 @@ final class SceneView: NSView {
         }
         animRoot.addSublayer(foamLayer)
         foamLayer.mask = foamMaskLayer
-        for l in [swimGroup, cloudShadows, birdShadows, critterGroup, birdGroup, cloudWhites, weatherGroup] {
+        for l in [swimGroup, carGroup, cloudShadows, birdShadows, critterGroup, birdGroup, cloudWhites, weatherGroup] {
             animRoot.addSublayer(l)
         }
 
@@ -117,6 +118,7 @@ final class SceneView: NSView {
         CATransaction.commit()
 
         updateSwimmers(scene.swimSpots)
+        updateCars(scene.carRoutes)
     }
 
     /// Pozastavenie/obnovenie všetkých animácií bez straty ich fázy.
@@ -150,15 +152,16 @@ final class SceneView: NSView {
         let b = CGRect(origin: .zero, size: bounds.size)
         rng = SplitMix64(seed: UInt64(theme.seed) &* 7919 &+ UInt64(b.width) &* 31 &+ UInt64(b.height))
 
-        let frames = [terrainLayer, animRoot, waterGroup, waterMaskLayer, foamLayer, foamMaskLayer, swimGroup,
+        let frames = [terrainLayer, animRoot, waterGroup, waterMaskLayer, foamLayer, foamMaskLayer, swimGroup, carGroup,
                       cloudShadows, birdShadows, critterGroup, birdGroup, cloudWhites, weatherGroup]
             + waveLayers + waveMaskLayers
         for l in frames { l.frame = b }
-        for g in [waterGroup, swimGroup, cloudShadows, birdShadows, critterGroup, birdGroup, cloudWhites, weatherGroup] {
+        for g in [waterGroup, swimGroup, carGroup, cloudShadows, birdShadows, critterGroup, birdGroup, cloudWhites, weatherGroup] {
             g.sublayers?.forEach { $0.removeFromSuperlayer() }
         }
         (waveLayers + [foamLayer]).forEach { $0.removeAllAnimations() }
         swimmers = []
+        carRoutes = []
 
         setUpWaves()
         setUpWater(in: b)
@@ -301,7 +304,7 @@ final class SceneView: NSView {
     /// Počet a dĺžka preletu rastú so šírkou: na ultrawide rovnaká hustota aj rýchlosť.
     private func addClouds(in b: CGRect) {
         let size = SceneAssets.cloudSize
-        let count = max(3, Int(b.width / 620))
+        let count = max(3, Int(b.width / 620 * theme.cloudCountFactor))
         let lift = CGPoint(x: -70, y: 110)
         for _ in 0..<count {
             let k = rand(0.75...1.45)
@@ -566,6 +569,58 @@ final class SceneView: NSView {
         throttle(sail, fps: 30)
         container.add(sail, forKey: "sail")
         return container
+    }
+
+    // MARK: Autá
+
+    private var carRoutes: [(CGPoint, CGPoint)] = []
+
+    /// Autá jazdia po uliciach mimo parkov, vpravo v jazdnom pruhu, každé svojou
+    /// rýchlosťou a s krátkou pauzou (ako na semafore) medzi jazdami.
+    private func updateCars(_ routes: [(CGPoint, CGPoint)]) {
+        let same = routes.count == carRoutes.count && zip(routes, carRoutes).allSatisfy {
+            hypot($0.0.x - $1.0.x, $0.0.y - $1.0.y) < 1 && hypot($0.1.x - $1.1.x, $0.1.y - $1.1.y) < 1
+        }
+        guard !same else { return }
+        carRoutes = routes
+        carGroup.sublayers?.forEach { $0.removeFromSuperlayer() }
+        guard theme.cars, !routes.isEmpty else { return }
+
+        let colors: [UInt32] = [0xE4574B, 0xF2F2F2, 0x2E6FD0, 0xF2C230, 0x333840, 0x5DBB63, 0xF28C38]
+        let count = max(4, Int(bounds.width / 110))
+        for i in 0..<count {
+            let route = routes[Int(rand(0...CGFloat(routes.count) - 0.01))]
+            let forward = rand(0...1) < 0.5
+            var a = forward ? route.0 : route.1
+            var z = forward ? route.1 : route.0
+            let len = max(hypot(z.x - a.x, z.y - a.y), 1)
+            let dir = CGPoint(x: (z.x - a.x) / len, y: (z.y - a.y) / len)
+            let lane = CGPoint(x: dir.y * 3.5, y: -dir.x * 3.5)          // pravý jazdný pruh
+            a = CGPoint(x: a.x + lane.x, y: a.y + lane.y)
+            z = CGPoint(x: z.x + lane.x, y: z.y + lane.y)
+
+            let car = CALayer()
+            car.actions = Self.noActions
+            car.contents = SceneAssets.car(colors[i % colors.count])
+            car.bounds = CGRect(origin: .zero, size: SceneAssets.carSize)
+            car.position = CGPoint(x: -100, y: -100)                       // počas pauzy mimo obrazovky
+            car.setAffineTransform(CGAffineTransform(rotationAngle: atan2(dir.y, dir.x)))
+
+            let speed = rand(45...80)
+            let travel = CFTimeInterval(len / speed)
+            let drive = CABasicAnimation(keyPath: "position")
+            drive.fromValue = NSValue(point: a)
+            drive.toValue = NSValue(point: z)
+            drive.duration = travel
+            let trip = CAAnimationGroup()
+            trip.animations = [drive]
+            trip.duration = travel + Double(rand(1...9))
+            trip.repeatCount = .infinity
+            trip.timeOffset = Double(rand(0...1)) * trip.duration
+            throttle(trip, fps: 30)
+            car.add(trip, forKey: "drive")
+            carGroup.addSublayer(car)
+        }
     }
 
     // MARK: Sneh

@@ -10,7 +10,8 @@ struct PathSegment {
 /// mierne zakrivené, orezané na okraj čistín. Ak by most bol dlhší než
 /// ~220 bodov, chodník sa vynechá.
 enum PathPlanner {
-    static func plan(field: TerrainField, icons: [CGRect]) -> [PathSegment] {
+    /// - Parameter overWater: pri mori sa úseky cez vodu kreslia ako mostíky; inde je celý chodník po zemi.
+    static func plan(field: TerrainField, icons: [CGRect], overWater: Bool) -> [PathSegment] {
         let centers = icons.map { CGPoint(x: $0.midX, y: $0.midY) }
         guard centers.count >= 2 else { return [] }
         var out: [PathSegment] = []
@@ -41,6 +42,10 @@ enum PathPlanner {
                   last - first >= 2
             else { continue }
             let p = Array(pts[first...last])
+            guard overWater else {
+                out.append(PathSegment(isBridge: false, points: p))
+                continue
+            }
             let water = p.map { field.sdf($0) < -0.5 }
 
             var runs: [(water: Bool, start: Int, end: Int)] = []

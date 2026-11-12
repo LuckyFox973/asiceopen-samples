@@ -62,3 +62,26 @@ struct SplitMix64: RandomNumberGenerator {
 }
 
 @inline(__always) func sstep(_ a: Float, _ b: Float, _ x: Float) -> Float { smooth(clamp01((x - a) / (b - a))) }
+
+/// Worley (bunkový) šum: vzdialenosť k najbližšiemu a druhému najbližšiemu bodu
+/// a hash bunky najbližšieho bodu. Koruny stromov, kopy oblakov, parcely polí.
+@inline(__always)
+func worley(_ x: Float, _ y: Float, cell: Float, seed: UInt32, jitter: Float = 0.8) -> (f1: Float, f2: Float, id: Float) {
+    let cx = Int32((x / cell).rounded(.down)), cy = Int32((y / cell).rounded(.down))
+    var f1: Float = 1e9, f2: Float = 1e9, id: Float = 0
+    for dj: Int32 in -1...1 {
+        for di: Int32 in -1...1 {
+            let i = cx &+ di, j = cy &+ dj
+            let fx = (Float(i) + 0.5 + (hash2(i, j, seed) - 0.5) * jitter) * cell
+            let fy = (Float(j) + 0.5 + (hash2(i, j, seed &+ 1) - 0.5) * jitter) * cell
+            let dx = x - fx, dy = y - fy
+            let d = (dx * dx + dy * dy).squareRoot()
+            if d < f1 {
+                f2 = f1; f1 = d; id = hash2(i, j, seed &+ 2)
+            } else if d < f2 {
+                f2 = d
+            }
+        }
+    }
+    return (f1, f2, id)
+}

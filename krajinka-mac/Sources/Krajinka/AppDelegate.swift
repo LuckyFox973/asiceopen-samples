@@ -5,7 +5,6 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private enum Keys {
         static let theme = "theme"
-        static let islandsEverywhere = "islandsEverywhere"
         static let paths = "paths"
         static let paused = "paused"
     }
@@ -13,11 +12,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var scenes: [CGDirectDisplayID: ScreenScene] = [:]
     private let iconProvider = DesktopIconProvider()
     private var statusItem: NSStatusItem?
-    private var theme = AppDelegate.makeTheme(ThemeID(rawValue: UserDefaults.standard.string(forKey: Keys.theme) ?? "") ?? .beach)
+    private var theme = AppDelegate.makeTheme(ThemeID(rawValue: UserDefaults.standard.string(forKey: Keys.theme) ?? "") ?? .plaz)
 
     private static func makeTheme(_ id: ThemeID) -> Theme {
         var t = Theme.named(id)
-        t.landOnlyAtIcons = !UserDefaults.standard.bool(forKey: Keys.islandsEverywhere)
         t.showPaths = UserDefaults.standard.bool(forKey: Keys.paths)
         return t
     }
@@ -172,10 +170,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         paths.state = theme.showPaths ? .on : .off
         menu.addItem(paths)
 
-        let islands = item("Ostrovy aj mimo ikon", #selector(toggleIslands))
-        islands.state = theme.landOnlyAtIcons ? .off : .on
-        menu.addItem(islands)
-
         let pause = item("Pozastaviť animácie", #selector(togglePause))
         pause.state = userPaused ? .on : .off
         menu.addItem(pause)
@@ -208,14 +202,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func togglePaths() {
         UserDefaults.standard.set(!theme.showPaths, forKey: Keys.paths)
-        theme = Self.makeTheme(theme.id)
-        scenes.values.forEach { $0.setTheme(theme) }
-        updateActivity()
-    }
-
-    @objc private func toggleIslands() {
-        let everywhere = !UserDefaults.standard.bool(forKey: Keys.islandsEverywhere)
-        UserDefaults.standard.set(everywhere, forKey: Keys.islandsEverywhere)
         theme = Self.makeTheme(theme.id)
         scenes.values.forEach { $0.setTheme(theme) }
         updateActivity()

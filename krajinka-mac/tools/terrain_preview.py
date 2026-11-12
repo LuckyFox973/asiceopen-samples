@@ -1,5 +1,5 @@
-# Krajinka v2 – dizajnový náhľad (numpy = pixelová fáza, cairo = vektorová fáza ≈ CoreGraphics)
-# Súradnice: body, os y HORE (ako CoreGraphics), počiatok vľavo dole.
+# Krajinka v3 – dizajn: „oblasť dokumentov“ × „okolie“ pre viac svetov.
+# numpy = pixely, cairo = vektory (≈ CoreGraphics). Os y hore, jednotky = body.
 import numpy as np, cairo, math, sys
 
 U = np.uint32
@@ -9,7 +9,7 @@ def hash2(x, y, seed):
         h = x * U(374761393); h = h + y * U(668265263); h = h + U(seed) * U(2246822519)
         h = (h ^ (h >> U(13))) * U(1274126177); h ^= h >> U(16)
     return (h & U(0xFFFFFF)).astype(np.float32) / np.float32(0xFFFFFF)
-def h1(i, j, seed): return float(hash2(i, j, seed))
+def h1(i, j, s): return float(hash2(i, j, s))
 def smooth(t): return t*t*(3-2*t)
 def sstep(a, b, x): return smooth(np.clip((x-a)/(b-a), 0, 1))
 def vnoise(x, y, seed):
@@ -22,102 +22,60 @@ def fbm(x, y, seed, octaves):
     for o in range(octaves):
         off = o*17.31; s = s + amp*vnoise(x*fr+off, y*fr-off, seed); norm += amp; amp *= .5; fr *= 2
     return s/norm
+def worley(x, y, cell, seed, jitter=.8):
+    """F1, F2 a hash bunky najbližšieho bodu (pre parcely, koruny stromov, kopy oblakov)."""
+    cx = np.floor(x/cell).astype(np.int64); cy = np.floor(y/cell).astype(np.int64)
+    F1 = np.full(x.shape, 1e9, np.float32); F2 = np.full(x.shape, 1e9, np.float32); ID = np.zeros(x.shape, np.float32)
+    for dj in (-1, 0, 1):
+        for di in (-1, 0, 1):
+            i = cx+di; j = cy+dj
+            fx = (i + .5 + (hash2(i, j, seed)-.5)*jitter)*cell; fy = (j + .5 + (hash2(i, j, seed+1)-.5)*jitter)*cell
+            d = np.sqrt((x-fx)**2 + (y-fy)**2)
+            closer = d < F1
+            F2 = np.where(closer, F1, np.minimum(F2, d)); ID = np.where(closer, hash2(i, j, seed+2), ID); F1 = np.minimum(F1, d)
+    return F1, F2, ID
 def rgb(h): return np.array([(h>>16)&255, (h>>8)&255, h&255], np.float32)/255
+def mix(a, b, t): return a + (b-a)*np.asarray(t, np.float32)[..., None]
+def C(h, shape): return np.broadcast_to(rgb(h), shape+(3,))
 
-SHORE, CLEAR = .42, .74
-ONLY_ICONS = True
 CELL = 6.0
+LIGHT = np.array([-.5, .6, .62]); LIGHT = LIGHT/np.linalg.norm(LIGHT)
 
 THEMES = {
- 'beach': dict(seed=1, wl=.30,
-   deepest=0x0B3A68, deep=0x1769A0, shallow=0x35BEC8, shelf=0x9BE7E1, lip=(0xFFFFFF, .80),
-   sand=0xEDD5A1, wetSand=0xCDB079, beachW=15.0,
-   land=0x7FB550, landAlt=0x5E9A3C, micro=.07, clearing=0xD9BD86, clearingEdge=0xB59A64, shadowTint=0x2F5D46,
-   path=0xE2C891, pathEdge=0xA88C5A, wood=0xA5764A, woodDark=0x6E4B2C,
-   trunk=0x9C7446, trunkDark=0x76532F, fDark=0x23703A, fMid=0x3F9444, fLight=0x8CCB5C,
-   rock=0x77858C, rockLight=0xB9C3C6, accent=0xF0806E, flowers=[0xFFD166, 0xFF8FA3, 0xFFFFFF],
-   ring=.55, shade=1.0),
- 'meadow': dict(seed=2, wl=.50,
-   deepest=0x173F5A, deep=0x245F7C, shallow=0x4A92A3, shelf=0x8CC6C7, lip=(0xE4F2EA, .40),
-   sand=0x8E8F57, wetSand=0x6C7243, beachW=4.0,
-   land=0x7DB352, landAlt=0x5F9741, micro=.07, clearing=0x9DC76D, clearingEdge=0x739F4B, shadowTint=0x24502E,
-   path=0xD1B57F, pathEdge=0x8E7548, wood=0x9A6E45, woodDark=0x654527,
-   trunk=0x7A5533, trunkDark=0x5A3D23, fDark=0x285F2B, fMid=0x41853A, fLight=0x93CD62,
-   rock=0x7D7F77, rockLight=0xB0B2A8, accent=0xE86A92, flowers=[0xFFFFFF, 0xF7D046, 0xE86A92, 0xB58CE0],
-   ring=.28, shade=1.0),
- 'winter': dict(seed=3, wl=.46,
-   deepest=0x6283A4, deep=0x84A5C3, shallow=0xAFCBDF, shelf=0xD6E7F2, lip=(0xFFFFFF, .55),
-   sand=0xE6EEF5, wetSand=0xCCD9E6, beachW=5.0,
-   land=0xF1F5F9, landAlt=0xE0E9F1, micro=.035, clearing=0xBACADB, clearingEdge=0x9EB2C7, shadowTint=0x7F97B8,
-   path=0xD5DFEA, pathEdge=0xA3B4C7, wood=0x8C6A4E, woodDark=0x5C432F,
-   trunk=0x5E4A3A, trunkDark=0x46362A, fDark=0x1C4639, fMid=0x2B5E4D, fLight=0x4C8A70,
-   rock=0x6B7684, rockLight=0xA4AFBC, accent=0xFFFFFF, flowers=[],
-   ring=0.0, shade=1.25),
+  'plaz':    dict(seed=11, R=(44, 70), wob=40, k=50, style='sea',    region='sand'),
+  'ostrovy': dict(seed=1,  R=(30, 46), wob=30, k=36, style='sea',    region='island'),
+  'les':     dict(seed=5,  R=(34, 52), wob=30, k=44, style='forest', region='cloud'),
+  'polia':   dict(seed=7,  R=(34, 52), wob=26, k=40, style='fields', region='pasture'),
+  'mesto':   dict(seed=9,  R=(30, 44), wob=22, k=36, style='city',   region='park'),
+  'zima':    dict(seed=3,  R=(36, 56), wob=30, k=44, style='snowforest', region='snow'),
 }
 
-# ---------------------------------------------------------------- pole
+# ---------------------------------------------------------------- pole oblasti
+def smin(a, b, k):
+    h = np.clip(.5 + .5*(b-a)/k, 0, 1); return b*(1-h) + a*h - k*h*(1-h)
+
 def build_field(W, H, icons, th):
     cols = int(np.ceil(W/CELL))+2; rows = int(np.ceil(H/CELL))+2
     X, Y = np.meshgrid(np.arange(cols, dtype=np.float32)*CELL, np.arange(rows, dtype=np.float32)*CELL)
-    if ONLY_ICONS:
-        f = .16 + (fbm(X/140, Y/140, th['seed'], 3)-.5)*.34
-    else:
-        f = th['wl'] + (fbm(X/280, Y/280, th['seed'], 4)-.5)*.95
-    # e = vzdialenosť od pobrežia ostrova daného dokumentu (záporná = na ostrove)
-    e1 = np.full_like(f, np.inf); d1 = np.full_like(f, np.inf); d2 = np.full_like(f, np.inf)
-    wob = fbm(X/55, Y/55, th['seed']+555, 3)
-    for k, (x0,y0,x1,y1) in enumerate(icons):
-        cr = min(32, (x1-x0)/2, (y1-y0)/2)                          # zaoblené rohy
-        ox = (h1(k, 1, 901)-.5)*16; oy = (h1(k, 2, 901)-.5)*16      # ostrov mierne mimo stredu
+    s = th['seed']; wob = fbm(X/60, Y/60, s+555, 3)
+    e = np.full_like(X, 1e4); d1 = np.full_like(X, 1e4)
+    for k, (x0, y0, x1, y1) in enumerate(icons):
+        cr = min(32, (x1-x0)/2, (y1-y0)/2)
+        ox = (h1(k, 1, 901)-.5)*16; oy = (h1(k, 2, 901)-.5)*16
         dx = np.maximum(np.maximum(x0+cr+ox-X, 0), X-(x1-cr+ox)); dy = np.maximum(np.maximum(y0+cr+oy-Y, 0), Y-(y1-cr+oy))
-        dr = np.maximum(np.sqrt(dx*dx+dy*dy)-cr, 0)
+        R = th['R'][0] + (th['R'][1]-th['R'][0])*h1(k, 3, 901)
+        ek = np.maximum(np.sqrt(dx*dx+dy*dy)-cr, 0) - R
+        e = smin(e, ek, th['k'])                                   # oblasti sa pri blízkosti plynulo spoja
         dxx = np.maximum(np.maximum(x0-X, 0), X-x1); dyy = np.maximum(np.maximum(y0-Y, 0), Y-y1)
-        draw_ = np.sqrt(dxx*dxx+dyy*dyy); d2 = np.where(draw_ < d1, d1, np.minimum(d2, draw_)); d1 = np.minimum(d1, draw_)
-        R = 30 + 16*h1(k, 3, 901)                                   # každý ostrov inak veľký
-        e = dr - (R + (wob-.5)*30)
-        e1 = np.minimum(e1, e)
-    clear = np.zeros_like(f)
-    if icons:
-        isl = SHORE - e1*.012
-        sep = np.where(np.isfinite(d2), d2-d1, 1e9)                  # os medzi rámikmi susedov
-        isl = isl - .6*smooth(np.clip(1-sep/28, 0, 1))             # prieliv medzi susedmi
-        isl = np.maximum(isl, np.where(d1 < 2, SHORE+.05, -1))      # dokument nikdy nestojí vo vode
-        f = np.maximum(f, isl)
-        clear = (1 - sstep(0, 14, d1)).astype(np.float32)
-    detail = fbm(X/90, Y/90, th['seed']+977, 2)
-    micro = fbm(X/16, Y/16, th['seed']+313, 2)
-    # gradient (na bod)
-    gx = np.zeros_like(f); gy = np.zeros_like(f)
-    gx[:,1:-1] = (f[:,2:]-f[:,:-2])/(2*CELL); gy[1:-1,:] = (f[2:,:]-f[:-2,:])/(2*CELL)
-    sdf = signed_distance(f-SHORE, gx, gy)
-    return dict(f=f, clear=clear.astype(np.float32), detail=detail, micro=micro, gx=gx, gy=gy, sdf=sdf, cols=cols, rows=rows)
-
-def signed_distance(s, gx, gy):
-    """Vzdialenosť od pobrežia v bodoch (+ pevnina, – voda): subpixelové semienka + 2-priechodový chamfer."""
-    rows, cols = s.shape; INF = 1e9
-    g = np.sqrt(gx*gx+gy*gy); g = np.maximum(g, 1e-4)
-    pos = s >= 0
-    edge = np.zeros_like(pos)
-    edge[:,1:] |= pos[:,1:] != pos[:,:-1]; edge[:,:-1] |= pos[:,:-1] != pos[:,1:]
-    edge[1:,:] |= pos[1:,:] != pos[:-1,:]; edge[:-1,:] |= pos[:-1,:] != pos[1:,:]
-    d = np.where(edge, np.minimum(np.abs(s)/g, CELL*1.5), INF).astype(np.float64)
-    a = CELL; b = CELL*math.sqrt(2)
-    def rowsweep(r):
-        idx = np.arange(cols)*a
-        r = np.minimum(r, np.minimum.accumulate(r - idx) + idx)         # zľava
-        ridx = idx[::-1]
-        rr = r[::-1]; rr = np.minimum(rr, np.minimum.accumulate(rr - idx) + idx); return rr[::-1]
-    for j in range(rows):                                               # dopredu
-        if j > 0:
-            p = d[j-1]; cand = p + a
-            cand[1:] = np.minimum(cand[1:], p[:-1]+b); cand[:-1] = np.minimum(cand[:-1], p[1:]+b)
-            d[j] = np.minimum(d[j], cand)
-        d[j] = rowsweep(d[j])
-    for j in range(rows-2, -1, -1):                                     # dozadu
-        p = d[j+1]; cand = p + a
-        cand[1:] = np.minimum(cand[1:], p[:-1]+b); cand[:-1] = np.minimum(cand[:-1], p[1:]+b)
-        d[j] = rowsweep(np.minimum(d[j], cand))
-    return np.where(pos, d, -d).astype(np.float32)
+        d1 = np.minimum(d1, np.sqrt(dxx*dxx+dyy*dyy))
+    sdf = -(e + (wob-.5)*th['wob'])                                  # + vnútri oblasti
+    sdf = np.where(d1 < 2, np.maximum(sdf, 6), sdf)                  # dokument nikdy mimo oblasti
+    hgt = np.clip(sdf, 0, 40)*.012
+    gx = np.zeros_like(hgt); gy = np.zeros_like(hgt)
+    gx[:, 1:-1] = (hgt[:, 2:]-hgt[:, :-2])/(2*CELL); gy[1:-1, :] = (hgt[2:, :]-hgt[:-2, :])/(2*CELL)
+    return dict(sdf=sdf.astype(np.float32), calm=(1-sstep(0, 14, d1)).astype(np.float32),
+                detail=fbm(X/90, Y/90, s+977, 2), micro=fbm(X/16, Y/16, s+313, 2), large=fbm(X/240, Y/240, s+71, 3),
+                gx=gx, gy=gy)
 
 def bil(A, x, y):
     rows, cols = A.shape
@@ -126,447 +84,510 @@ def bil(A, x, y):
     a = A[iy, ix]; b = A[iy, ix+1]; c = A[iy+1, ix]; d = A[iy+1, ix+1]
     t = a+(b-a)*fx; return t + ((c+(d-c)*fx) - t)*fy
 
-LIGHT = np.array([-.5, .6, .62]); LIGHT = LIGHT/np.linalg.norm(LIGHT)
+def relief(gx, gy, k=22):
+    nx, ny = -gx*k, -gy*k; nl = np.sqrt(nx*nx+ny*ny+1)
+    return (nx*LIGHT[0]+ny*LIGHT[1]+LIGHT[2])/nl - LIGHT[2]
+
+# ---------------------------------------------------------------- okolia (pozadie)
+def bg_sea(P, th):
+    depth = np.maximum(-P['sdf'], 0); sh = P['X'].shape
+    pal = dict(plaz=(0x0E7FA6, 0x14A3BF, 0x3FD3D3, 0xA8F0E6), ostrovy=(0x0B3A68, 0x1769A0, 0x35BEC8, 0x9BE7E1))[th['name']]
+    deepest, deep, shallow, shelf = pal
+    t1 = 1-np.exp(-depth/(60 if th['name'] == 'plaz' else 45)); t2 = 1-np.exp(-depth/260)
+    c = mix(C(shallow, sh), C(deep, sh), t1); c = mix(c, C(deepest, sh), t2*.85)
+    c = c + ((P['m']-.5)*.06*(1-t1))[..., None] + ((P['d']-.5)*.05*t1)[..., None]
+    c = mix(c, C(shelf, sh), np.exp(-((depth-24)/3.2)**2)*.22)
+    c = mix(c, C(0xFFFFFF, sh), np.clip(1-depth/2.6, 0, 1)*.8)
+    return mix(c, C(shelf, sh), (P['Y']/P['H'])*.07)
+
+def bg_forest(P, th, snowy=False):
+    """Les zhora: veľké tieňované koruny (Worley); Les má aj lúky, Zima je súvislý les."""
+    X, Y = P['X'], P['Y']; sh = X.shape
+    if snowy:
+        meadow, meadowAlt, gap, dark, mid, light = 0xDDE6EF, 0xCFDAE6, 0x1B3A33, 0x24493E, 0x3A6B59, 0xF4F8FB
+        grove = np.ones(sh, np.float32)
+    else:
+        meadow, meadowAlt, gap, dark, mid, light = 0x9CC56A, 0x86B457, 0x1E3F1D, 0x2E5E2C, 0x4C8239, 0x86BD55
+        grove = sstep(.47, .53, P['L'] + (P['d']-.5)*.25)
+    c = mix(C(meadow, sh), C(meadowAlt, sh), sstep(.35, .65, P['d'])) + ((P['m']-.5)*.06)[..., None]
+    cell = 17.0
+    F1, F2, ID = worley(X, Y, cell, th['seed']+40, jitter=.75)
+    r = 8.5 + ID*3.5
+    crown = np.clip(1 - F1/r, 0, 1)
+    F1s, _, IDs = worley(X+3, Y-3, cell, th['seed']+40, jitter=.75)
+    lit = np.clip(1 - F1s/(8.5+IDs*3.5), 0, 1)
+    tc = mix(C(gap, sh), C(dark, sh), sstep(0, .25, crown))
+    tc = mix(tc, C(mid, sh), smooth(lit)*sstep(0, .2, crown))
+    if snowy:
+        # zasnežené koruny: sneh s modrastým tieňovaním, zelená len v tieni a v medzerách
+        snowc = mix(C(0xA9BDD3, sh), C(0xF6F9FC, sh), sstep(.0, .75, lit))
+        greenish = np.clip((1-lit)*sstep(0, .3, crown)*1.1 - .25, 0, 1)
+        snowc = mix(snowc, C(dark, sh), greenish*.75)
+        gapm = 1 - sstep(1.2, 4.0, F2-F1)
+        tc = mix(snowc, C(gap, sh), np.maximum(gapm*.85, 1-sstep(0, .12, crown)))
+    else:
+        tc = mix(tc, C(light, sh), sstep(.7, 1, lit)*.55)
+    tc = tc + ((P['m']-.5)*.04)[..., None]
+    edge_bump = sstep(.0, .15, crown)
+    tree = grove*np.maximum(edge_bump, sstep(.55, .62, grove))      # okraj lesa = jednotlivé koruny
+    # tieň lesa na lúku (vpravo dole)
+    gs = bil(P['F']['large'], X-6, Y+6); gs = sstep(.47, .53, gs + (bil(P['F']['detail'], X-6, Y+6)-.5)*.25)
+    if not snowy:
+        c = c*(1 - .3*gs*(1-tree))[..., None]
+    return mix(c, tc, np.clip(tree, 0, 1))
+
+def bg_snowground(P, th):
+    sh = P['X'].shape
+    c = mix(C(0xD9E3ED, sh), C(0xCBD7E4, sh), sstep(.35, .65, P['d'])) + ((P['m']-.5)*.04)[..., None]
+    return c
+
+def bg_fields(P, th):
+    """Polia: parcely (Voronoi), plodiny so smerovými riadkami, živé ploty na hraniciach."""
+    X, Y = P['X'], P['Y']; sh = X.shape
+    F1, F2, ID = worley(X, Y, 170, th['seed']+60, jitter=.9)
+    crops = [  # (farba, farba riadkov, sila riadkov)
+        (0xE3C46A, 0xC9A64B, .5),   # pšenica
+        (0x7FA346, 0x6A8C38, .55),  # mladé obilie (tmavšie)
+        (0x9B7652, 0x7E5C3E, .9),   # oranisko
+        (0xA48ACB, 0x7E64A8, .8),   # levanduľa
+        (0xF2D84A, 0xD8BC2E, .3),   # repka
+        (0xD9A35A, 0xBF8A44, .6),   # kukurica
+        (0xC9B27A, 0xB09662, .6),   # strnisko
+    ]
+    k = np.minimum((ID*len(crops)).astype(int), len(crops)-1)
+    base = np.zeros(sh+(3,), np.float32); row = np.zeros(sh+(3,), np.float32); st = np.zeros(sh, np.float32)
+    for i, (a, b, s) in enumerate(crops):
+        m = k == i; base[m] = rgb(a); row[m] = rgb(b); st[m] = s
+    ang = ID*np.pi*7.3
+    u = X*np.cos(ang) + Y*np.sin(ang)
+    stripes = (np.sin(u/2.2)*.5+.5)**2
+    c = mix(base, row, stripes*st) + ((P['m']-.5)*.05)[..., None]
+    edge = F2 - F1
+    hedge = 1 - sstep(2.5, 5.5, edge)
+    HF1, _, HID = worley(X, Y, 5, th['seed']+61)
+    bump = np.clip(1 - HF1/3.5, 0, 1)
+    hc = mix(C(0x2F5E2A, sh), C(0x5C8F3E, sh), bump)
+    # tieň živého plotu
+    c = c*(1-.25*(1-sstep(3.5, 9, edge)))[..., None]
+    c = mix(c, hc, hedge*sstep(.4, .45, P['L']*0+np.clip(ID*3 % 1, 0, 1)*0+.5))
+    return c
+
+def bg_city(P, th):
+    """Mesto: mriežka ulíc (asfalt, chodníky, prerušované čiary); bloky – budovy kreslí vektor."""
+    X, Y = P['X'], P['Y']; sh = X.shape
+    bw, bh, sw = CITY['bw'], CITY['bh'], CITY['street']
+    u = np.mod(X, bw); v = np.mod(Y, bh)
+    ds = np.minimum(np.minimum(u, bw-u), np.minimum(v, bh-v))        # vzdialenosť od osi ulice
+    street = ds < sw/2
+    walk = (ds >= sw/2) & (ds < sw/2+3)
+    c = C(0xC9C4BA, sh).copy() + ((P['m']-.5)*.05)[..., None]         # dvor bloku
+    c[walk] = rgb(0xDAD6CE)
+    asph = C(0x4A4E55, sh) + ((P['m']-.5)*.05)[..., None]
+    c = np.where(street[..., None], asph, c)
+    # stredová prerušovaná čiara
+    dash_h = (np.abs(np.minimum(v, bh-v)) < .55) & (np.mod(X, 14) < 7) & (np.minimum(u, bw-u) > sw/2)
+    dash_v = (np.abs(np.minimum(u, bw-u)) < .55) & (np.mod(Y, 14) < 7) & (np.minimum(v, bh-v) > sw/2)
+    c[dash_h | dash_v] = rgb(0xE8E2C8)
+    return c
+CITY = dict(bw=150.0, bh=118.0, street=14.0)
+
+# ---------------------------------------------------------------- oblasti dokumentov
+def region_sand(P, th):
+    sh = P['X'].shape; inl = np.maximum(P['sdf'], 0)
+    c = mix(C(0xF2E7CF, sh), C(0xEADBBB, sh), sstep(.35, .65, P['d'])*(1-.6*P['calm']))
+    c = c + ((P['m']-.5)*.035)[..., None]
+    # zrnká piesku
+    g = hash2(np.floor(P['X']*1.7), np.floor(P['Y']*1.7), 5)
+    c = c - ((g > .985)*.10)[..., None] + ((g < .012)*.06)[..., None]
+    c = mix(c, C(0xD9C59B, sh), np.clip(1-inl/7, 0, 1)*.55)            # mokrý piesok
+    return c
+
+def region_island(P, th):
+    sh = P['X'].shape; inl = np.maximum(P['sdf'], 0); calm = 1-.6*P['calm']
+    lc = mix(C(0x7FB550, sh), C(0x5E9A3C, sh), sstep(.36, .64, P['d'])*calm) + ((P['m']-.5)*.07*calm)[..., None]
+    sandc = mix(C(0xEDD5A1, sh), C(0xCDB079, sh), np.clip(1-inl/3.5, 0, 1)*.55)
+    lc = mix(sandc, lc, sstep(13, 18, inl))
+    s = np.clip(relief(P['gx'], P['gy']), -.35, .35)
+    lc = lc*(1+np.maximum(s, 0)*1.1)[..., None]
+    return mix(lc, lc*C(0x2F5D46, sh)*1.6, np.maximum(-s, 0)*1.6)
+
+def cloud_sdf(P, ox=0, oy=0):
+    """Oblaková oblasť s kopovitým okrajom: sdf + kopy (Worley)."""
+    X, Y = P['X']+ox, P['Y']+oy
+    sdf = bil(P['F']['sdf'], X, Y) if (ox or oy) else P['sdf']
+    F1, _, ID = worley(X, Y, 24, 333, jitter=.7)
+    puff = (11 + ID*6) - F1
+    return sdf + .9*np.clip(puff, -12, 20), F1, ID
+
+def region_cloud(P, th):
+    sh = P['X'].shape
+    s, F1, ID = cloud_sdf(P)
+    rr = 11 + ID*6
+    dome = np.clip(1 - F1/rr, 0, 1)
+    F1l, _, IDl = worley(P['X']+3, P['Y']-3, 24, 333, jitter=.7)
+    lit = np.clip(1 - F1l/(11+IDl*6), 0, 1)
+    c = mix(C(0xC9D8EA, sh), C(0xF7FAFD, sh), sstep(0, .7, lit*.8 + sstep(0, 30, s)*.6))
+    c = mix(c, C(0xFFFFFF, sh), sstep(.5, 1, lit)*.6*(1-sstep(10, 30, s)))
+    return c, s
+
+def region_pasture(P, th):
+    sh = P['X'].shape; inl = np.maximum(P['sdf'], 0); calm = 1-.6*P['calm']
+    c = mix(C(0xB9E07E, sh), C(0xA6D46C, sh), sstep(.35, .65, P['d'])*calm) + ((P['m']-.5)*.06*calm)[..., None]
+    # kvietky v tráve (mimo ikon)
+    F1, _, ID = worley(P['X'], P['Y'], 9, 404)
+    fl = (F1 < 1.1) & (ID > .55) & (P['calm'] < .3)
+    cols = np.stack([rgb(0xFFFFFF), rgb(0xF7D046), rgb(0xE86A92)])
+    c = np.where(fl[..., None], cols[(ID*7).astype(int) % 3], c)
+    # drevený plot: dvojitá žrď + stĺpiky
+    fence = np.exp(-((inl-4)/.55)**2)
+    post = (np.mod(P['X']+P['Y'], 9) < 1.4) & (np.abs(inl-4) < 1.3)
+    c = mix(c, C(0x8A6440, sh), fence*.9)
+    c = np.where(post[..., None], rgb(0x6B4A2E), c)
+    return mix(c, c*.82, np.clip(1-np.abs(inl-2.2)/1.2, 0, 1)*.6)    # tieň plotu
+
+def region_park(P, th):
+    sh = P['X'].shape; inl = np.maximum(P['sdf'], 0); calm = 1-.6*P['calm']
+    c = mix(C(0x86C25C, sh), C(0x74B04E, sh), sstep(.35, .65, P['d'])*calm) + ((P['m']-.5)*.06*calm)[..., None]
+    # pruhy kosenia
+    stripes = (np.mod(P['X']+P['Y']*.0, 24) < 12)*.035*calm
+    c = c + stripes[..., None]
+    c = mix(c, C(0x3F7A33, sh), np.clip(1-np.abs(inl-3)/2.2, 0, 1))  # živý plot okolo parku
+    return mix(c, C(0xD8D2C4, sh), np.clip(1-inl/1.2, 0, 1))          # obrubník
+
+def region_snow(P, th):
+    sh = P['X'].shape; calm = 1-.6*P['calm']
+    c = mix(C(0xF7FAFD, sh), C(0xE6EEF6, sh), sstep(.35, .65, P['d'])*calm) + ((P['m']-.5)*.03*calm)[..., None]
+    s = np.clip(relief(P['gx'], P['gy'])*1.3, -.35, .35)
+    c = c*(1+np.maximum(s, 0)*.5)[..., None]
+    return mix(c, c*C(0x8FA6C4, sh)*1.25, np.maximum(-s, 0)*1.6)
 
 # ---------------------------------------------------------------- pixely
-def shade_pixels(F, W, H, scale, th):
+def shade_pixels(F, W, H, scale, th, name):
     w, h = int(W*scale), int(H*scale)
-    xs = (np.arange(w)+.5)/scale; ys = (np.arange(h)[::-1]+.5)/scale
-    X, Y = np.meshgrid(xs, ys)
-    f = bil(F['f'], X, Y); d = bil(F['detail'], X, Y); m = bil(F['micro'], X, Y)
-    gx = bil(F['gx'], X, Y); gy = bil(F['gy'], X, Y); sdf = bil(F['sdf'], X, Y)
-    C = {k: rgb(th[k]) for k in ['deepest','deep','shallow','shelf','sand','wetSand','land','landAlt','clearing','clearingEdge','shadowTint']}
-    mix = lambda a, b, t: a + (b-a)*np.asarray(t)[..., None]
-    out = np.zeros((h, w, 3), np.float32)
-
-    # voda
-    depth = np.maximum(-sdf, 0)
-    t1 = 1-np.exp(-depth/45); t2 = 1-np.exp(-depth/230)
-    wc = mix(C['shallow'], C['deep'], t1); wc = mix(wc, C['deepest'], t2*.85)
-    wc = wc + ((m-.5)*.06*(1-t1))[..., None]                         # piesočné dno na plytčine
-    wc = wc + ((d-.5)*.05*t1)[..., None]                              # žíhanie hlbokej vody
-    shelf = np.exp(-((depth-24)/3.2)**2)*.22                           # podvodný prah
-    wc = mix(wc, C['shelf'], shelf)
-    wc = mix(wc, np.broadcast_to(rgb(th['lip'][0]), wc.shape), np.clip(1-depth/2.6, 0, 1)*th['lip'][1])
-    wc = mix(wc, np.broadcast_to(C['shelf'], wc.shape), (Y/H)*.07)    # odraz oblohy hore
-
-    # pevnina
-    inland = np.maximum(sdf, 0)
-    patch = sstep(.36, .64, d)
-    calm = bil(F['clear'], X, Y)
-    lc = mix(C['land'], C['landAlt'], patch*(1-.6*calm)) + ((m-.5)*th['micro']*(1-.6*calm))[..., None]
-    sandc = mix(C['sand'], C['wetSand'], np.clip(1-inland/3.5, 0, 1)*.55) + ((m-.5)*.03)[..., None]
-    lc = mix(sandc, lc, sstep(th['beachW']-2, th['beachW']+3, inland))
-    calm = bil(F['clear'], X, Y)
-    tc = np.zeros_like(calm)
-    edge = np.zeros_like(calm)
-    lc = mix(lc, C['clearingEdge'], edge*(1-tc))
-    lc = mix(lc, C['clearing'] + ((d-.5)*.03)[..., None], tc)
-    # tieňovanie reliéfu
-    K = 22
-    nx, ny = -gx*K, -gy*K; nz = np.ones_like(nx); nl = np.sqrt(nx*nx+ny*ny+1)
-    sh = (nx*LIGHT[0]+ny*LIGHT[1]+nz*LIGHT[2])/nl - LIGHT[2]
-    sh = np.clip(sh*th['shade'], -.35, .35)*(1-tc*.75)
-    lc = lc*(1+np.maximum(sh, 0)*1.1)[..., None]
-    lc = mix(lc, lc*C['shadowTint']*1.6, np.maximum(-sh, 0)*1.6)
-
-    land = sdf >= 0
-    aa = np.clip(sdf/.6+.5, 0, 1)                                       # antialias pobrežia
-    out = mix(wc, lc, aa)
-    # vinetácia (elipsa podľa pomeru strán) + zrno
+    X, Y = np.meshgrid((np.arange(w)+.5)/scale, (np.arange(h)[::-1]+.5)/scale)
+    X = X.astype(np.float32); Y = Y.astype(np.float32)
+    P = dict(X=X, Y=Y, W=W, H=H, F=F, sdf=bil(F['sdf'], X, Y), calm=bil(F['calm'], X, Y), d=bil(F['detail'], X, Y),
+             m=bil(F['micro'], X, Y), L=bil(F['large'], X, Y), gx=bil(F['gx'], X, Y), gy=bil(F['gy'], X, Y))
+    th = dict(th, name=name)
+    style, region = th['style'], th['region']
+    bg = {'sea': bg_sea, 'forest': bg_forest, 'fields': bg_fields, 'city': bg_city,
+          'snowforest': bg_snowground}[style](P, th)
+    if region == 'cloud':
+        rc, s = region_cloud(P, th)
+        sshadow, _, _ = cloud_sdf(P, -16, 20)                          # tieň oblakov na lese
+        bg = bg*(1 - .32*sstep(-2, 6, sshadow))[..., None]
+        out = mix(bg, rc, np.clip(s/.8+.5, 0, 1))
+        P['sdf_eff'] = s
+    else:
+        rc = {'sand': region_sand, 'island': region_island, 'pasture': region_pasture,
+              'park': region_park, 'snow': region_snow}[region](P, th)
+        if region == 'snow':     # mäkký tieň okraja snehovej pláne v lese
+            bg = bg*(1-.2*np.clip(1+P['sdf']/10, 0, 1))[..., None]
+        out = mix(bg, rc, np.clip(P['sdf']/.6+.5, 0, 1))
+        P['sdf_eff'] = P['sdf']
     vx = (X/W-.5)*2; vy = (Y/H-.5)*2; r = np.sqrt(vx*vx+vy*vy)/1.2
     out = out*(1-.10*sstep(.55, 1.15, r))[..., None]
     grain = (hash2(np.arange(w)[None, :]+np.zeros((h, 1)), np.arange(h)[:, None]+np.zeros((1, w)), 7)-.5)*.018
-    out = out + grain[..., None]
-    return np.clip(out, 0, 1), dict(sdf=sdf, depth=depth)
+    return np.clip(out + grain[..., None], 0, 1), P
 
 # ---------------------------------------------------------------- vektor
 class Pen:
-    def __init__(self, surf, H, scale):
-        self.c = cairo.Context(surf); self.c.translate(0, H*scale); self.c.scale(scale, -scale)
-    def rgba(self, hexv, a=1.0):
-        r, g, b = rgb(hexv); self.c.set_source_rgba(float(r), float(g), float(b), a)
+    def __init__(s, surf, H, scale):
+        s.c = cairo.Context(surf); s.c.translate(0, H*scale); s.c.scale(scale, -scale)
+    def rgba(s, hx, a=1.0):
+        r, g, b = rgb(hx); s.c.set_source_rgba(float(r), float(g), float(b), a)
 
-def soft_shadow(p, cx, cy, rx, ry, alpha):
+def soft_shadow(p, cx, cy, rx, ry, a=.3):
     c = p.c; c.save(); c.translate(cx, cy); c.scale(1, ry/rx)
-    g = cairo.RadialGradient(0, 0, 0, 0, 0, rx); g.add_color_stop_rgba(0, 0, 0, 0, alpha); g.add_color_stop_rgba(.55, 0, 0, 0, alpha*.7); g.add_color_stop_rgba(1, 0, 0, 0, 0)
-    c.set_source(g); c.arc(0, 0, rx, 0, 2*math.pi); c.fill(); c.restore()
+    g = cairo.RadialGradient(0, 0, 0, 0, 0, rx); g.add_color_stop_rgba(0, 0, 0, 0, a); g.add_color_stop_rgba(.55, 0, 0, 0, a*.7); g.add_color_stop_rgba(1, 0, 0, 0, 0)
+    c.set_source(g); c.arc(0, 0, rx, 0, 6.2832); c.fill(); c.restore()
 
-def shaded_blob(p, cx, cy, r, dark, light, mid=None):
-    c = p.c
+def blob(p, cx, cy, r, dark, light, mid):
     g = cairo.RadialGradient(cx-r*.38, cy+r*.42, r*.05, cx, cy, r*1.05)
-    L = rgb(light); D = rgb(dark); M = rgb(mid) if mid is not None else (L+D)/2
-    g.add_color_stop_rgb(0, *map(float, L)); g.add_color_stop_rgb(.45, *map(float, M)); g.add_color_stop_rgb(1, *map(float, D))
-    c.set_source(g); c.arc(cx, cy, r, 0, 2*math.pi); c.fill()
+    for o, col in ((0, light), (.45, mid), (1, dark)): g.add_color_stop_rgb(o, *map(float, rgb(col)))
+    p.c.set_source(g); p.c.arc(cx, cy, r, 0, 6.2832); p.c.fill()
 
-def draw_tree(p, x, y, s, th, seed):
+def tree(p, x, y, s, dark=0x2E6B2E, mid=0x4A8C3A, light=0x8CC860, trunk=0x5A3D23):
+    p.rgba(trunk); p.c.rectangle(x-s*.06, y, s*.12, s*.3); p.c.fill()
     R = s*.44
-    p.rgba(th['trunkDark']); p.c.rectangle(x-s*.06, y, s*.12, s*.32); p.c.fill()
-    blobs = [(-.48, -.22, .68), (.46, -.18, .7), (.05, .32, .66), (0, 0, 1.0)]
-    for k, (ox, oy, rr) in enumerate(blobs):
-        j = h1(k, seed, 5)*.15
-        shaded_blob(p, x+ox*R, y+s*.62+oy*R+j*R, R*rr*(.92+j), th['fDark'], th['fLight'], th['fMid'])
-    p.rgba(th['fLight'], .55)
-    for k in range(3):
-        a = 2.2 + k*.35; rr = R*(.45+.12*k)
-        p.c.arc(x+math.cos(a)*rr*.6, y+s*.62+math.sin(a)*rr*.6, s*.035, 0, 2*math.pi); p.c.fill()
+    for (ox, oy, rr) in [(-.48, -.22, .68), (.46, -.18, .7), (.05, .32, .66), (0, 0, 1)]:
+        blob(p, x+ox*R, y+s*.62+oy*R, R*rr, dark, light, mid)
 
-def draw_palm(p, x, y, s, th, seed):
-    c = p.c; lean = (h1(seed, 1, 9)-.5)*.5
-    top = (x+s*(.18+lean*.3), y+s*.95); ctrl = (x+s*(.02+lean*.2), y+s*.55)
-    n = 8
-    for k in range(n):                                                  # kmeň z prstencov
-        t0 = k/n; t1 = (k+1)/n
-        def q(t): return ((1-t)**2*x+2*(1-t)*t*ctrl[0]+t*t*top[0], (1-t)**2*y+2*(1-t)*t*ctrl[1]+t*t*top[1])
-        a, b = q(t0), q(t1); wdt = s*(.14-.06*t0)
-        p.rgba(th['trunk'] if k % 2 == 0 else th['trunkDark']); c.set_line_width(wdt); c.set_line_cap(cairo.LINE_CAP_ROUND)
-        c.move_to(*a); c.line_to(*b); c.stroke()
-    leaves = 7; base = h1(seed, 2, 9)*6.28
+def palm(p, x, y, s, seed):
+    c = p.c; top = (x+s*.2, y+s*.95)
+    c.set_line_cap(cairo.LINE_CAP_ROUND)
+    for k in range(8):
+        t0, t1 = k/8, (k+1)/8
+        q = lambda t: ((1-t)**2*x+2*(1-t)*t*(x+s*.03)+t*t*top[0], (1-t)**2*y+2*(1-t)*t*(y+s*.55)+t*t*top[1])
+        p.rgba(0x9C7446 if k % 2 == 0 else 0x76532F); c.set_line_width(s*(.14-.06*t0)); c.move_to(*q(t0)); c.line_to(*q(t1)); c.stroke()
+    base = h1(seed, 2, 9)*6.28
     for layer in (0, 1):
-        for k in range(leaves):
-            if (k % 2) != layer: continue
-            ang = base + k/leaves*2*math.pi; L = s*.62*(.85+.3*h1(seed, k, 3)); w = s*.15; droop = s*.18
+        for k in range(7):
+            if k % 2 != layer: continue
+            ang = base+k/7*6.2832; L = s*.62*(.85+.3*h1(seed, k, 3)); w = s*.15; dr = s*.18
             c.save(); c.translate(*top); c.rotate(ang)
-            # list: horná hrana, špička, dolná hrana (prehnutý dole = –y v lokálnych súradniciach po rotácii)
-            c.move_to(0, 0); c.curve_to(L*.3, w*1.1, L*.75, w*.6, L, -droop*.5)
-            c.curve_to(L*.7, -w*.2, L*.3, -w*.7, 0, 0); c.close_path()
+            c.move_to(0, 0); c.curve_to(L*.3, w*1.1, L*.75, w*.6, L, -dr*.5); c.curve_to(L*.7, -w*.2, L*.3, -w*.7, 0, 0)
             g = cairo.LinearGradient(0, 0, L, 0)
-            D = rgb(th['fDark']); M = rgb(th['fMid']); Lc = rgb(th['fLight'])
-            if layer == 0: g.add_color_stop_rgb(0, *map(float, D)); g.add_color_stop_rgb(1, *map(float, M))
-            else: g.add_color_stop_rgb(0, *map(float, M)); g.add_color_stop_rgb(.6, *map(float, Lc)); g.add_color_stop_rgb(1, *map(float, M))
-            c.set_source(g); c.fill()
-            p.rgba(th['fDark'], .5); c.set_line_width(s*.018); c.move_to(s*.03, 0); c.curve_to(L*.4, w*.25, L*.75, 0, L*.97, -droop*.48); c.stroke()
+            cols = (0x23703A, 0x3F9444) if layer == 0 else (0x3F9444, 0x8CCB5C)
+            g.add_color_stop_rgb(0, *map(float, rgb(cols[0]))); g.add_color_stop_rgb(1, *map(float, rgb(cols[1]))); c.set_source(g); c.fill()
             c.restore()
-    p.rgba(0x5A3A1E)
-    for k in range(3):
-        a = base + k*2.1; c.arc(top[0]+math.cos(a)*s*.06, top[1]+math.sin(a)*s*.05, s*.05, 0, 2*math.pi); c.fill()
 
-def draw_pine(p, x, y, s, th, seed, snowy):
+def pine(p, x, y, s):
     c = p.c
-    p.rgba(th['trunkDark']); c.rectangle(x-s*.05, y, s*.1, s*.22); c.fill()
-    tiers = 4
-    for k in range(tiers):
-        by = y+s*(.12+.24*k); half = s*(.46-.095*k); ay = by+s*.46
-        sag = s*.05
-        # ľavá (osvetlená) a pravá polovica
-        for side, col in ((-1, th['fMid']), (1, th['fDark'])):
+    p.rgba(0x46362A); c.rectangle(x-s*.05, y, s*.1, s*.22); c.fill()
+    apex = y
+    for k in range(4):
+        by = y+s*(.12+.24*k); half = s*(.46-.095*k); ay = by+s*.46; sag = s*.05; apex = ay
+        for side, col in ((-1, 0x2B5E4D), (1, 0x1C4639)):
             c.move_to(x, ay); c.curve_to(x+side*half*.35, ay-s*.2, x+side*half*.8, by+s*.08, x+side*half, by)
             c.curve_to(x+side*half*.5, by-sag*.2, x+side*half*.2, by+sag, x, by+sag*.6); c.close_path()
             p.rgba(col); c.fill()
-        if snowy:
-            p.rgba(0xFFFFFF, .95)
-            c.move_to(x-half*.98, by+s*.01); c.curve_to(x-half*.6, by+s*.07, x-half*.25, by+s*.06, x-half*.02, by+s*.08)
-            c.curve_to(x-half*.3, by+s*.02, x-half*.65, by-s*.015, x-half*.98, by+s*.01); c.fill()
-    if snowy:
-        ay = y+s*(.12+.24*(tiers-1))+s*.46
-        p.rgba(0xFFFFFF); c.move_to(x, ay); c.curve_to(x-s*.06, ay-s*.06, x-s*.1, ay-s*.11, x-s*.11, ay-s*.13)
-        c.curve_to(x-s*.02, ay-s*.1, x+s*.05, ay-s*.12, x+s*.1, ay-s*.13); c.curve_to(x+s*.07, ay-s*.08, x+s*.03, ay-s*.04, x, ay); c.fill()
+        p.rgba(0xFFFFFF, .95)
+        c.move_to(x-half*.98, by+s*.01); c.curve_to(x-half*.6, by+s*.07, x-half*.25, by+s*.06, x-half*.02, by+s*.08)
+        c.curve_to(x-half*.3, by+s*.02, x-half*.65, by-s*.015, x-half*.98, by+s*.01); c.fill()
+    p.rgba(0xFFFFFF); ay = apex
+    c.move_to(x, ay); c.curve_to(x-s*.06, ay-s*.06, x-s*.1, ay-s*.11, x-s*.11, ay-s*.13)
+    c.curve_to(x-s*.02, ay-s*.1, x+s*.05, ay-s*.12, x+s*.1, ay-s*.13); c.curve_to(x+s*.07, ay-s*.08, x+s*.03, ay-s*.04, x, ay); c.fill()
 
-def draw_bush(p, x, y, s, th, seed, flowers):
-    for k, (ox, oy, rr) in enumerate([(-.24, .18, .3), (.24, .2, .3), (0, .34, .36)]):
-        shaded_blob(p, x+ox*s, y+oy*s, s*rr, th['fDark'], th['fLight'], th['fMid'])
-    if flowers:
-        for k in range(4):
-            a = h1(seed, k, 4)*6.28; r = s*.28*h1(seed, k, 6)
-            p.rgba(flowers[int(h1(seed, 0, 8)*len(flowers)) % len(flowers)])
-            p.c.arc(x+math.cos(a)*r, y+s*.32+math.sin(a)*r, s*.045, 0, 2*math.pi); p.c.fill()
-
-def draw_rock(p, x, y, s, th, seed, snowy, foam):
-    c = p.c; n = 7; pts = []
+def umbrella(p, x, y, s, seed):
+    c = p.c; cols = [0xE4574B, 0xF2B33D, 0x3E8ED0, 0x2BB39B][int(h1(seed, 1, 1)*4) % 4]
+    # uterák
+    c.save(); c.translate(x+s*.55, y-s*.35); c.rotate((h1(seed, 2, 2)-.5)*.8)
+    p.rgba([0xFFFFFF, 0xF6C744, 0x7FC8F8][int(h1(seed, 3, 3)*3) % 3]); c.rectangle(-s*.22, -s*.45, s*.44, s*.9); c.fill()
+    p.rgba(0xE4574B, .8)
+    for k in range(3): c.rectangle(-s*.22, -s*.3+k*s*.3, s*.44, s*.08); c.fill()
+    c.restore()
+    soft_shadow(p, x+s*.25, y-s*.2, s*.62, s*.5, .28)
+    n = 8
     for k in range(n):
-        a = k/n*2*math.pi; r = (.85+.3*h1(seed, k, 21))
-        pts.append((x+math.cos(a)*s*.5*r, y+math.sin(a)*s*.34*r))
-    if foam:
-        p.rgba(0xFFFFFF, .45); c.set_line_width(1.6); c.save(); c.translate(x, y-s*.04); c.scale(1, .62)
-        c.arc(0, 0, s*.66, 0, 2*math.pi); c.restore(); c.stroke()
-    p.rgba(th['rock']); c.move_to(*pts[0]); [c.line_to(*q) for q in pts[1:]]; c.close_path(); c.fill()
-    p.rgba(0xFFFFFF if snowy else th['rockLight'], .95 if snowy else 1)
-    c.move_to(x+s*.06, y+s*.06); [c.line_to(*q) for q in pts[2:6]]; c.close_path(); c.fill()
+        a0 = k/n*6.2832; a1 = (k+1)/n*6.2832
+        c.move_to(x, y); c.arc(x, y, s*.5, a0, a1); c.close_path()
+        p.rgba(cols if k % 2 == 0 else 0xFFFFFF); c.fill()
+    p.rgba(0x000000, .15); c.arc(x, y, s*.5, 0, 6.2832); c.set_line_width(.6); c.stroke()
+    p.rgba(0x5A3A1E); c.arc(x, y, s*.06, 0, 6.2832); c.fill()
 
-def draw_tuft(p, x, y, s, th, seed):
-    c = p.c; p.rgba(th['fDark'], .75); c.set_line_width(.9); c.set_line_cap(cairo.LINE_CAP_ROUND)
-    for k in range(4):
-        a = math.pi/2 + (k-1.5)*.35 + (h1(seed, k, 2)-.5)*.2; L = s*(.7+.4*h1(seed, k, 3))
-        c.move_to(x+(k-1.5)*.8, y); c.line_to(x+math.cos(a)*L, y+math.sin(a)*L); c.stroke()
-
-def draw_flowers(p, x, y, s, th, seed):
-    fl = th['flowers']
-    for k in range(6):
-        a = h1(seed, k, 4)*6.28; r = s*h1(seed, k, 6)
-        cx, cy = x+math.cos(a)*r, y+math.sin(a)*r*.7
-        p.rgba(0x000000, .18); p.c.arc(cx+.5, cy-.5, 1.6, 0, 6.28); p.c.fill()
-        p.rgba(fl[int(h1(seed, k, 8)*len(fl)) % len(fl)]); p.c.arc(cx, cy, 1.5, 0, 6.28); p.c.fill()
-
-def draw_starfish(p, x, y, s, th, seed):
-    c = p.c; rot = h1(seed, 1, 1)*6.28; p.rgba(th['accent'])
+def starfish(p, x, y, s, seed):
+    c = p.c; rot = h1(seed, 1, 1)*6.28; p.rgba(0xF0806E)
     for k in range(10):
-        a = rot + k/10*2*math.pi; r = s*(.5 if k % 2 == 0 else .2)
+        a = rot + k/10*6.2832; r = s*(.5 if k % 2 == 0 else .2)
         (c.move_to if k == 0 else c.line_to)(x+math.cos(a)*r, y+math.sin(a)*r)
     c.close_path(); c.fill()
 
-def draw_reeds(p, x, y, s, th, seed):
-    c = p.c; c.set_line_cap(cairo.LINE_CAP_ROUND)
-    for k in range(5):
-        ox = (k-2)*s*.12 + (h1(seed, k, 1)-.5)*s*.1; L = s*(.7+.5*h1(seed, k, 2)); bend = (h1(seed, k, 3)-.5)*s*.25
-        p.rgba(th['fMid']); c.set_line_width(1.0); c.move_to(x+ox, y); c.curve_to(x+ox, y+L*.5, x+ox+bend, y+L*.8, x+ox+bend, y+L); c.stroke()
-        if h1(seed, k, 4) < .5:
-            p.rgba(0x6B4426); c.save(); c.translate(x+ox+bend*.95, y+L*.88); c.scale(.45, 1); c.arc(0, 0, s*.1, 0, 6.28); c.restore(); c.fill()
-
-def draw_lily(p, x, y, s, th, seed):
+def shell(p, x, y, s, seed):
     c = p.c; a = h1(seed, 1, 1)*6.28
-    p.rgba(0x000000, .12); c.save(); c.translate(x+1, y-1); c.scale(1, .8); c.arc(0, 0, s*.5, 0, 6.28); c.restore(); c.fill()
-    c.save(); c.translate(x, y); c.scale(1, .8)
-    c.move_to(0, 0); c.arc(0, 0, s*.5, a+.35, a-.35+2*math.pi); c.close_path()
-    g = cairo.RadialGradient(-s*.15, s*.15, 0, 0, 0, s*.5)
-    g.add_color_stop_rgb(0, *map(float, rgb(th['fLight']))); g.add_color_stop_rgb(1, *map(float, rgb(th['fMid']))); c.set_source(g); c.fill()
-    c.restore()
-    if h1(seed, 2, 2) < .35:
-        for k in range(6):
-            b = k/6*6.28; p.rgba(0xF6B6C8); c.save(); c.translate(x+math.cos(b)*s*.12, y+math.sin(b)*s*.1); c.rotate(b); c.scale(1, .55); c.arc(0, 0, s*.13, 0, 6.28); c.restore(); c.fill()
-        p.rgba(0xFFD166); c.arc(x, y, s*.07, 0, 6.28); c.fill()
-
-def draw_crack(p, x, y, s, seed):
-    c = p.c; pts = [(x, y)]; a = h1(seed, 0, 1)*6.28
+    c.save(); c.translate(x, y); c.rotate(a)
+    p.rgba(0xF6E7D2); c.move_to(0, 0); c.arc(0, 0, s*.5, 0, math.pi); c.close_path(); c.fill()
+    p.rgba(0xC9A27E, .8); c.set_line_width(.5)
     for k in range(5):
-        a += (h1(seed, k, 2)-.5)*1.4; L = s*(.4+.6*h1(seed, k, 3))
-        pts.append((pts[-1][0]+math.cos(a)*L, pts[-1][1]+math.sin(a)*L))
-    for col, off, wd in ((0x3E5F80, (.6, -.6), 1.0), (0xFFFFFF, (0, 0), .8)):
-        p.rgba(col, .35 if col != 0xFFFFFF else .7); c.set_line_width(wd)
-        c.move_to(pts[0][0]+off[0], pts[0][1]+off[1]); [c.line_to(q[0]+off[0], q[1]+off[1]) for q in pts[1:]]; c.stroke()
+        b = (k+.5)/5*math.pi; c.move_to(0, 0); c.line_to(math.cos(b)*s*.48, math.sin(b)*s*.48); c.stroke()
+    c.restore()
 
-# ---------------------------------------------------------------- chodníky a mosty
-def mst(points):
-    n = len(points); used = [False]*n; best = [(1e18, -1)]*n; best[0] = (0, -1); edges = []
-    for _ in range(n):
-        u = min((i for i in range(n) if not used[i]), key=lambda i: best[i][0]); used[u] = True
-        if best[u][1] >= 0: edges.append((best[u][1], u))
-        for v in range(n):
-            if not used[v]:
-                d = math.dist(points[u], points[v])
-                if d < best[v][0]: best[v] = (d, u)
-    return edges
+def haybale(p, x, y, s):
+    c = p.c; soft_shadow(p, x+s*.3, y-s*.1, s*.6, s*.3, .3)
+    g = cairo.RadialGradient(x-s*.15, y+s*.15, 0, x, y, s*.5)
+    g.add_color_stop_rgb(0, *map(float, rgb(0xF1D98B))); g.add_color_stop_rgb(1, *map(float, rgb(0xC9A44E)))
+    c.set_source(g); c.arc(x, y, s*.5, 0, 6.2832); c.fill()
+    p.rgba(0xA9873B, .8); c.set_line_width(.7)
+    for r in (.15, .28, .4): c.arc(x, y, s*r, 0, 5.5); c.stroke()
 
-def plan_paths(F, icons, th):
-    """Vráti zoznam polyline úsekov: (typ 'land'|'bridge', [body])."""
-    cs = [((a+c)/2, (b+d)/2) for (a, b, c, d) in icons]
-    out = []
-    if len(cs) < 2: return out
-    for (i, j) in mst(cs):
-        A, B = cs[i], cs[j]; L = math.dist(A, B)
-        if L < 150 or L > 900: continue
-        mx, my = (A[0]+B[0])/2, (A[1]+B[1])/2; px, py = -(B[1]-A[1])/L, (B[0]-A[0])/L
-        bend = (h1(i, j, 77)-.5)*.35*L; C = (mx+px*bend, my+py*bend)
-        n = max(2, int(L/3)); pts = []
-        for k in range(n+1):
-            t = k/n; pts.append(((1-t)**2*A[0]+2*(1-t)*t*C[0]+t*t*B[0], (1-t)**2*A[1]+2*(1-t)*t*C[1]+t*t*B[1]))
-        P = np.array(pts); cv = bil(F['clear'], P[:, 0], P[:, 1]); sv = bil(F['sdf'], P[:, 0], P[:, 1])
-        inside = np.where(cv < .5)[0]
-        if len(inside) < 3: continue
-        P = P[inside[0]:inside[-1]+1]; sv = sv[inside[0]:inside[-1]+1]
-        water = sv < -.5
-        # dĺžky vodných úsekov
-        runs = []; k = 0
-        while k < len(P):
-            w = water[k]; e = k
-            while e+1 < len(P) and water[e+1] == w: e += 1
-            runs.append((w, k, e)); k = e+1
-        if any(w and (e-k)*3 > 220 for (w, k, e) in runs): continue
-        for (w, k, e) in runs:
-            if w: k = max(0, k-2); e = min(len(P)-1, e+2)
-            out.append(('bridge' if w else 'land', P[k:e+1]))
-    return out
+def house(p, x, y, s, seed, roofc=None):
+    """Domček zhora-spredu: sedlová strecha s dvoma tónmi, stena s oknami, tieň."""
+    c = p.c; w = s; d = s*.7; wall = s*.3
+    roofc = roofc or [0xB5523B, 0x8C5A3C, 0x5E6B7A, 0xC0703F][int(h1(seed, 1, 5)*4) % 4]
+    soft_shadow(p, x+w*.35, y-wall*.1, w*.75, d*.45, .35)
+    # predná stena
+    p.rgba(0xEDE3D0); c.rectangle(x-w/2, y, w, wall); c.fill()
+    p.rgba(0x6E8FB0)
+    for k in range(3): c.rectangle(x-w/2+w*(.15+k*.28), y+wall*.3, w*.12, wall*.4); c.fill()
+    p.rgba(0x7A5533); c.rectangle(x-w*.06, y, w*.12, wall*.6); c.fill()
+    # strecha: dve plochy
+    top = y+wall; ridge = top+d*.5
+    r0 = rgb(roofc); r1 = r0*.78
+    c.move_to(x-w/2-1, top); c.line_to(x+w/2+1, top); c.line_to(x+w/2+1, ridge); c.line_to(x-w/2-1, ridge); c.close_path()
+    c.set_source_rgb(*map(float, r1)); c.fill()
+    c.move_to(x-w/2-1, ridge); c.line_to(x+w/2+1, ridge); c.line_to(x+w/2+1, top+d); c.line_to(x-w/2-1, top+d); c.close_path()
+    c.set_source_rgb(*map(float, r0)); c.fill()
+    p.rgba(0x000000, .15); c.set_line_width(.6); c.move_to(x-w/2-1, ridge); c.line_to(x+w/2+1, ridge); c.stroke()
+    # komín
+    p.rgba(0x8A6A5A); c.rectangle(x+w*.22, ridge+d*.08, w*.1, d*.22); c.fill()
 
-def draw_paths(p, segs, th):
-    c = p.c; c.set_line_cap(cairo.LINE_CAP_ROUND); c.set_line_join(cairo.LINE_JOIN_ROUND)
-    def poly(P):
-        c.move_to(*P[0]); [c.line_to(*q) for q in P[1:]]
-    for kind, P in segs:
-        if kind != 'land' or len(P) < 2: continue
-        p.rgba(th['pathEdge'], .45); c.set_line_width(10); poly(P); c.stroke()
-        p.rgba(th['path']); c.set_line_width(7); poly(P); c.stroke()
-        for k in range(0, len(P), 3):
-            if h1(k, len(P), 41) < .5:
-                q = P[k]; o = (h1(k, 1, 42)-.5)*5; p.rgba(th['pathEdge'], .5); c.arc(q[0]+o, q[1]-o*.5, .9, 0, 6.28); c.fill()
-    for kind, P in segs:
-        if kind != 'bridge' or len(P) < 2: continue
-        p.rgba(0x000000, .22); c.set_line_width(12); c.move_to(P[0][0]+3, P[0][1]-3); [c.line_to(q[0]+3, q[1]-3) for q in P[1:]]; c.stroke()
-        p.rgba(th['wood']); c.set_line_width(9); poly(P); c.stroke()
-        p.rgba(th['woodDark'], .8); c.set_line_width(.8)
-        for k in range(1, len(P)-1):
-            if k % 1 == 0:
-                q0, q1 = P[k-1], P[k+1]; tx, ty = q1[0]-q0[0], q1[1]-q0[1]; tl = math.hypot(tx, ty) or 1; nx, ny = -ty/tl*4.5, tx/tl*4.5
-                c.move_to(P[k][0]-nx, P[k][1]-ny); c.line_to(P[k][0]+nx, P[k][1]+ny); c.stroke()
-        for side in (-1, 1):
-            p.rgba(th['woodDark']); c.set_line_width(1.3); first = True
-            for k in range(len(P)):
-                q0, q1 = P[max(0, k-1)], P[min(len(P)-1, k+1)]; tx, ty = q1[0]-q0[0], q1[1]-q0[1]; tl = math.hypot(tx, ty) or 1
-                pt = (P[k][0]-ty/tl*5*side, P[k][1]+tx/tl*5*side)
-                (c.move_to if first else c.line_to)(*pt); first = False
-            c.stroke()
+def building(p, x0, y0, x1, y1, hgt, seed, kind):
+    """Budova v miernej perspektíve: strecha posunutá hore o h*0.22, viditeľná južná stena s oknami."""
+    c = p.c; lift = hgt*.22
+    roof = {'glass': 0x6F9CC4, 'concrete': 0xB9B6AE, 'brick': 0xB0714F, 'dark': 0x6B7078, 'beige': 0xD8C9A8}[kind]
+    rc = rgb(roof)
+    # stena
+    c.move_to(x0, y0); c.line_to(x1, y0); c.line_to(x1, y0+lift); c.line_to(x0, y0+lift); c.close_path()
+    c.set_source_rgb(*map(float, rc*.62)); c.fill()
+    # okná na stene
+    if lift > 6:
+        p.rgba(0xF4E7B8 if kind != 'glass' else 0xBFD9F0, .55)
+        rows = int(lift/5); cols = max(1, int((x1-x0)/5))
+        for r in range(rows):
+            for k in range(cols):
+                if h1(seed+r, k, 77) < .7:
+                    c.rectangle(x0+1.2+k*(x1-x0-2.4)/cols, y0+1.5+r*5, (x1-x0-2.4)/cols*.55, 2.2); c.fill()
+    # strecha
+    ry0 = y0+lift; ry1 = y1+lift
+    if kind == 'glass':
+        g = cairo.LinearGradient(x0, ry1, x1, ry0)
+        g.add_color_stop_rgb(0, *map(float, rc*1.15)); g.add_color_stop_rgb(.5, *map(float, rc)); g.add_color_stop_rgb(1, *map(float, rc*.85))
+        c.set_source(g)
+    else:
+        c.set_source_rgb(*map(float, rc))
+    c.rectangle(x0, ry0, x1-x0, ry1-ry0); c.fill()
+    p.rgba(0x000000, .12); c.set_line_width(.8); c.rectangle(x0+.4, ry0+.4, x1-x0-.8, ry1-ry0-.8); c.stroke()
+    # strešné detaily
+    w, h = x1-x0, ry1-ry0
+    if kind != 'glass' and w > 14 and h > 14:
+        for k in range(int(h1(seed, 3, 3)*3)+1):
+            ax = x0+3+h1(seed, k, 4)*(w-9); ay = ry0+3+h1(seed, k, 5)*(h-9)
+            p.rgba(0x000000, .18); c.rectangle(ax+1, ay-1, 5, 4); c.fill()
+            p.rgba(0xD9D9D6); c.rectangle(ax, ay, 5, 4); c.fill()
+    if hgt > 70 and w > 20 and h > 20 and h1(seed, 9, 9) < .5:          # heliport
+        cx, cy = x0+w/2, ry0+h/2; p.rgba(0x4B4F55); c.arc(cx, cy, min(w, h)*.3, 0, 6.2832); c.fill()
+        p.rgba(0xFFFFFF); c.set_line_width(1)
+        c.move_to(cx-2.5, cy-3); c.line_to(cx-2.5, cy+3); c.move_to(cx+2.5, cy-3); c.line_to(cx+2.5, cy+3); c.move_to(cx-2.5, cy); c.line_to(cx+2.5, cy); c.stroke()
+    if kind == 'concrete' and h1(seed, 8, 8) < .25 and w > 16 and h > 16:   # strešná záhrada
+        p.rgba(0x7DB352); c.rectangle(x0+3, ry0+3, w-6, h-6); c.fill()
+        for k in range(3): blob(p, x0+5+h1(seed, k, 11)*(w-10), ry0+5+h1(seed, k, 12)*(h-10), 2.6, 0x2E6B2E, 0x8CC860, 0x4A8C3A)
 
-# ---------------------------------------------------------------- rozmiestnenie
-def place(F, W, H, icons, segs, th, name):
-    pathpts = np.concatenate([P for _, P in segs]) if segs else np.zeros((0, 2))
-    def blocked(x, y, rad):
-        for (x0, y0, x1, y1) in icons:
-            if x0-rad < x < x1+rad and y0-rad < y < y1+rad: return True
-        if len(pathpts):
-            d = np.min((pathpts[:, 0]-x)**2+(pathpts[:, 1]-y)**2)
-            if d < (rad*.8+6)**2: return True
-        return False
-    items, ground = [], []
-    seed = th['seed']
-    g = 30
+def draw_city(p, F, W, H, th, icons):
+    bw, bh, sw = CITY['bw'], CITY['bh'], CITY['street']
+    downtown = lambda x, y: float(bil(F['large'], x, y))
+    shadows, builds = [], []
+    for bj in range(int(H/bh)+1):
+        for bi in range(int(W/bw)+1):
+            x0 = bi*bw + sw/2 + 3; y0 = bj*bh + sw/2 + 3; x1 = (bi+1)*bw - sw/2 - 3; y1 = (bj+1)*bh - sw/2 - 3
+            nx = 1 + int(h1(bi, bj, 21)*2.99); ny = 1 + int(h1(bi, bj, 22)*1.99)
+            for a in range(nx):
+                for b in range(ny):
+                    lx0 = x0 + (x1-x0)*a/nx + 1.5; lx1 = x0 + (x1-x0)*(a+1)/nx - 1.5
+                    ly0 = y0 + (y1-y0)*b/ny + 1.5; ly1 = y0 + (y1-y0)*(b+1)/ny - 1.5
+                    sd = h1(bi*7+a, bj*5+b, 31)
+                    dt = downtown((lx0+lx1)/2, (ly0+ly1)/2)
+                    hgt = 8 + 30*sd + 160*sstep(.5, .8, dt)*h1(bi*7+a, bj*5+b, 32)
+                    lift = hgt*.22
+                    corners = [(lx0, ly0), (lx1, ly0), (lx0, ly1+lift), (lx1, ly1+lift), ((lx0+lx1)/2, (ly0+ly1)/2)]
+                    if any(bil(F['sdf'], x, y) > -8 for x, y in corners): continue
+                    kind = 'glass' if hgt > 90 else ['concrete', 'brick', 'dark', 'beige', 'concrete'][int(sd*4.99)]
+                    builds.append((lx0, ly0, lx1, ly1, hgt, int(sd*1e5), kind))
+    for (lx0, ly0, lx1, ly1, hgt, sd, kind) in builds:                  # tiene (doprava dole)
+        L = hgt*.35
+        p.rgba(0x000000, .22); c = p.c
+        c.move_to(lx0, ly1); c.line_to(lx1, ly1); c.line_to(lx1+L, ly1-L*.6); c.line_to(lx1+L, ly0-L*.6); c.line_to(lx0+L, ly0-L*.6); c.line_to(lx0, ly0); c.close_path(); c.fill()
+    for b in sorted(builds, key=lambda b: -b[1]):
+        building(p, *b)
+
+def place_decor(p, F, W, H, icons, th, name, P):
+    """Vektorové prvky podľa témy."""
+    seed = th['seed']; items = []
+    def free(x, y, box):
+        bx0, by0, bx1, by1 = box
+        return not any(not (bx1 < a0 or bx0 > a1 or by1 < b0 or by0 > b1) for (a0, b0, a1, b1) in icons)
+    g = 21 if name == 'zima' else 30
     for j in range(int(H/g)+2):
         for i in range(int(W/g)+2):
             x = (i+.1+.8*h1(i, j, seed+11))*g; y = (j+.1+.8*h1(i, j, seed+23))*g
             roll = h1(i, j, seed+37); sz = h1(i, j, seed+53); sid = int(h1(i, j, seed+61)*1e6)
-            cl = float(bil(F['clear'], x, y)); sd = float(bil(F['sdf'], x, y)); grove = float(bil(F['detail'], x, y))
-            land = sd > 0; inland = sd
-            dens = sstep(.38, .62, grove)
+            sd = float(bil(F['sdf'], x, y)); dens = float(sstep(.38, .62, bil(F['detail'], x, y)))
             kind = None
-            if name == 'beach':
-                if land and inland > th['beachW']*.6 and roll < .35+.5*dens: kind = 'palm' if roll < .1+.45*dens else 'bush'
-                elif land and inland > 3 and roll < .5: kind = 'bush'
-                elif -40 < sd < -8 and roll < .05: kind = 'rockw'
-            elif name == 'meadow':
-                if land and inland > 5 and roll < .35+.5*dens: kind = 'tree' if roll < .05+.55*dens else 'bushf'
-                elif -30 < sd < -6 and roll < .12: kind = 'lily'
-                elif land and roll < .03: kind = 'rock'
-            else:
-                if land and inland > 4 and roll < .35+.5*dens: kind = 'pine'
-                elif land and roll < .16+.72*dens: kind = 'rocks'
+            if name == 'plaz':
+                if 18 < sd and roll < .05: kind = 'umbrella'
+                elif 2 < sd < 14 and roll < .1: kind = 'star' if roll < .05 else 'shell'
+                elif 10 < sd < 40 and .9 < roll: kind = 'palm'
+            elif name == 'ostrovy':
+                if sd > 9 and roll < .35+.5*dens: kind = 'palm' if roll < .1+.45*dens else 'bush'
+            elif name == 'polia':
+                if -60 < sd < -14 and roll < .035: kind = 'house'
+                elif sd < -10 and roll < .06:
+                    _, _, ID = worley(np.array([x], np.float32), np.array([y], np.float32), 170, seed+60, jitter=.9)
+                    if int(ID[0]*7) in (0, 6): kind = 'hay'
+                elif sd > 6 and roll < .08: kind = 'tree'
+            elif name == 'mesto':
+                if sd > 6 and roll < .3+.3*dens: kind = 'tree'
+            elif name == 'les':
+                if sd < -16 and roll < .02 and float(bil(F['large'], x, y)) < .45: kind = 'tree'
+            elif name == 'zima':
+                if sd < -3 and roll < .93: kind = 'pine'
             if not kind: continue
-            base = dict(palm=32, tree=36, pine=32, bush=17, bushf=17, rock=14, rocks=15, rockw=13, lily=13)[kind]
+            base = dict(pine=26, umbrella=16, star=6, shell=5, palm=30, bush=16, house=20, hay=9, tree=22)[kind]
             s = base*(.8+.45*sz)
-            bx0, by0, bx1, by1 = x-s*.6-5, y-s*.3-5, x+s*.6+5, y+s*1.15+5
-            if any(not (bx1 < a0 or bx0 > a1 or by1 < b0 or by0 > b1) for (a0, b0, a1, b1) in icons): continue
-            if blocked(x, y, 0): continue
+            box = (x-s*.7-5, y-s*.5-5, x+s*.7+5, y+s*1.2+5)
+            if not free(x, y, box): continue
             items.append((x, y, kind, s, sid))
-    g = 20
-    for j in range(int(H/g)+2):
-        for i in range(int(W/g)+2):
-            x = (i+.1+.8*h1(i, j, seed+71))*g; y = (j+.1+.8*h1(i, j, seed+83))*g
-            roll = h1(i, j, seed+97); sid = int(h1(i, j, seed+101)*1e6)
-            cl = float(bil(F['clear'], x, y)); sd = float(bil(F['sdf'], x, y))
-            kind = None
-            if name == 'beach':
-                if 2 < sd < th['beachW']-3 and roll < .035: kind = 'star'
-                elif sd > th['beachW']+4 and roll < .22: kind = 'tuft'
-            elif name == 'meadow':
-                if 0 < sd < 7 and roll < .35: kind = 'reeds'
-                elif -6 < sd <= 0 and roll < .25: kind = 'reeds'
-                elif sd > 8 and roll < .16: kind = 'flowers'
-                elif sd > 8 and roll < .42: kind = 'tuft'
-            else:
-                if sd < -20 and roll < .012: kind = 'crack'
-            if not kind: continue
-            s = dict(star=6, tuft=6, reeds=12, flowers=7, crack=14)[kind]
-            if blocked(x, y, 3 if kind != 'crack' else 2): continue
-            ground.append((x, y, kind, s, sid))
-    return items, ground
-
-def draw_decor(p, items, ground, th, name):
-    for (x, y, k, s, sid) in ground:
-        {'tuft': lambda: draw_tuft(p, x, y, s, th, sid), 'flowers': lambda: draw_flowers(p, x, y, s, th, sid),
-         'star': lambda: draw_starfish(p, x, y, s, th, sid), 'reeds': lambda: draw_reeds(p, x, y, s, th, sid),
-         'crack': lambda: draw_crack(p, x, y, s, sid)}[k]()
-    items = sorted(items, key=lambda it: -it[1])
-    for (x, y, k, s, sid) in items:                                    # všetky tiene najprv
-        if k in ('lily',): continue
-        rx = s*(.62 if k in ('tree', 'pine', 'palm') else .45)
-        dx = s*(.38 if k in ('tree', 'pine', 'palm') else .12)
-        soft_shadow(p, x+dx, y-s*.08, rx, rx*.42, .30)
+    items.sort(key=lambda it: -it[1])
     for (x, y, k, s, sid) in items:
-        if k == 'tree': draw_tree(p, x, y, s, th, sid)
-        elif k == 'palm': draw_palm(p, x, y, s, th, sid)
-        elif k == 'pine': draw_pine(p, x, y, s, th, sid, name == 'winter')
-        elif k == 'bush': draw_bush(p, x, y, s, th, sid, None)
-        elif k == 'bushf': draw_bush(p, x, y, s, th, sid, th['flowers'])
-        elif k in ('rock', 'rocks', 'rockw'): draw_rock(p, x, y, s, th, sid, k == 'rocks', k == 'rockw')
-        elif k == 'lily': draw_lily(p, x, y, s, th, sid)
+        if k in ('tree', 'palm', 'bush', 'pine'): soft_shadow(p, x+s*.38, y-s*.08, s*.62, s*.26, .3 if k != 'pine' else .22)
+    for (x, y, k, s, sid) in items:
+        if k == 'umbrella': umbrella(p, x, y, s, sid)
+        elif k == 'star': starfish(p, x, y, s, sid)
+        elif k == 'shell': shell(p, x, y, s, sid)
+        elif k == 'palm': palm(p, x, y, s, sid)
+        elif k == 'bush':
+            for (ox, oy, rr) in [(-.24, .18, .3), (.24, .2, .3), (0, .34, .36)]: blob(p, x+ox*s, y+oy*s, s*rr, 0x23703A, 0x8CCB5C, 0x3F9444)
+        elif k == 'house': house(p, x, y, s, sid)
+        elif k == 'hay': haybale(p, x, y, s)
+        elif k == 'tree': tree(p, x, y, s)
+        elif k == 'pine': pine(p, x, y, s)
 
-# ---------------------------------------------------------------- statický snímok animácií
-def draw_anim_frame(p, F, px, W, H, th, name, icons):
-    c = p.c
-    rng = np.random.default_rng(th['seed'])
-    # vlny (prstence) – snímok v strede cyklu
-    if th['ring'] > 0:
-        pass  # kreslí sa v pixelovej fáze nižšie
-    # oblaky: tieň + biely oblak
-    for k in range(max(3, int(W/650))):
-        cx = rng.uniform(0, W); cy = rng.uniform(0, H); sc = rng.uniform(.8, 1.4)
-        for (dx, dy, col, a) in ((0, 0, 0x000000, .16 if name != 'winter' else .10), (70, 110, 0xFFFFFF, .22)):
-            for b in range(8):
-                bx = cx+dx+rng.uniform(-120, 120)*sc; by = cy+dy+rng.uniform(-35, 35)*sc; r = rng.uniform(55, 95)*sc
-                g = cairo.RadialGradient(bx, by, 0, bx, by, r); r0, g0, b0 = map(float, rgb(col))
-                g.add_color_stop_rgba(0, r0, g0, b0, a*.55); g.add_color_stop_rgba(1, r0, g0, b0, 0)
-                c.set_source(g); c.arc(bx, by, r, 0, 6.28); c.fill()
+def draw_anim_hint(p, W, H, name, th):
+    """Statický snímok pohyblivých vecí (autá, oblaky), len pre náhľad."""
+    c = p.c; rng = np.random.default_rng(th['seed'])
+    if name == 'mesto':
+        bw, bh = CITY['bw'], CITY['bh']
+        for k in range(int(W/90)):
+            horiz = rng.random() < .5
+            if horiz:
+                y = (rng.integers(1, int(H/bh)+1))*bh + (3 if rng.random() < .5 else -3); x = rng.uniform(0, W); ang = 0
+            else:
+                x = (rng.integers(1, int(W/bw)+1))*bw + (3 if rng.random() < .5 else -3); y = rng.uniform(0, H); ang = math.pi/2
+            col = [0xE4574B, 0xF2F2F2, 0x2E6FD0, 0xF2C230, 0x333840, 0x5DBB63][rng.integers(0, 6)]
+            c.save(); c.translate(x, y); c.rotate(ang)
+            p.rgba(0x000000, .25); c.rectangle(-4.5, -2.8, 10, 5); c.fill()
+            p.rgba(col); c.rectangle(-5, -2.4, 10, 4.8); c.fill()
+            p.rgba(0x1E2A38, .8); c.rectangle(.5, -1.9, 2.4, 3.8); c.fill()
+            c.restore()
+    if name in ('les',):
+        for k in range(int(W/400)):
+            cx = rng.uniform(0, W); cy = rng.uniform(0, H)
+            for b in range(7):
+                bx = cx+rng.uniform(-50, 50); by = cy+rng.uniform(-15, 15); r = rng.uniform(18, 32)
+                g = cairo.RadialGradient(bx, by, 0, bx, by, r); g.add_color_stop_rgba(0, 1, 1, 1, .5); g.add_color_stop_rgba(1, 1, 1, 1, 0)
+                c.set_source(g); c.arc(bx, by, r, 0, 6.29); c.fill()
 
-def ring_overlay(px, th, phase):
-    """Vlnové prstence pri brehu v danej fáze (0–1) – rovnaké ako ringMask × opacity v Swifte."""
-    depth = px['depth']; sdf = px['sdf']
-    a = np.zeros_like(depth)
-    if th['ring'] <= 0: return a
-    for k, d0 in enumerate(RING_DEPTHS):
-        ph = (phase - RING_PHASES[k]) % 1.0
-        env = np.interp(ph, [0, .18, .42, 1], [0, 1, 0, 0])
-        ring = np.exp(-((depth-d0)/2.0)**2)*(sdf < 0)*(1-k*.18)
-        a = np.maximum(a, ring*env*th['ring'])
-    foam_env = np.interp((phase-.78) % 1, [0, .12, .5, 1], [.35, 1, .35, .35])
-    foam = np.clip(1-depth/5, 0, 1)*(sdf < 0)*foam_env*th['ring']*.9
-    return np.maximum(a, foam)
-RING_DEPTHS = [6.0, 12.0, 19.0, 27.0]
-RING_PHASES = [.6, .4, .2, 0.0]   # vonkajší prstenec ide prvý → vlna beží k brehu
-
-def render(W, H, icons, name, scale, anim=True, phase=.55):
+def render(W, H, icons, name, scale):
     th = THEMES[name]
     F = build_field(W, H, icons, th)
-    col, px = shade_pixels(F, W, H, scale, th)
-    if anim:
-        ra = ring_overlay(px, th, phase)[..., None]; col = col + (1-col)*ra*.85
+    col, P = shade_pixels(F, W, H, scale, th, name)
     h, w = col.shape[:2]
     arr = np.zeros((h, w, 4), np.uint8)
     arr[..., 0] = (col[..., 2]*255).astype(np.uint8); arr[..., 1] = (col[..., 1]*255).astype(np.uint8)
     arr[..., 2] = (col[..., 0]*255).astype(np.uint8); arr[..., 3] = 255
     surf = cairo.ImageSurface.create_for_data(memoryview(arr), cairo.FORMAT_ARGB32, w, h, w*4)
     p = Pen(surf, H, scale)
-    segs = []
-    items, ground = place(F, W, H, icons, segs, th, name)
-    draw_decor(p, items, ground, th, name)
-    if anim: draw_anim_frame(p, F, px, W, H, th, name, icons)
-    # simulované ikony
-    for (x0, y0, x1, y1) in icons:
-        ix = x0+14; iy = y1-8
+    if th['style'] == 'city': draw_city(p, F, W, H, th, icons)
+    place_decor(p, F, W, H, icons, th, name, P)
+    draw_anim_hint(p, W, H, name, th)
+    for (x0, y0, x1, y1) in icons:       # simulované ikony (64 pt + popisok)
+        ix = (x0+x1)/2-32; iy = y1-14
         p.rgba(0x000000, .25); p.c.rectangle(ix+2, iy-66, 64, 64); p.c.fill()
         p.rgba(0x4A86E8); p.c.rectangle(ix, iy-64, 64, 64); p.c.fill()
-        p.rgba(0xFFFFFF, .95); p.c.rectangle(ix+8, iy-80, 48, 8); p.c.fill()
-    surf.flush()
-    return surf
+        p.rgba(0xFFFFFF, .95); p.c.rectangle(ix+8, iy-80, 48, 7); p.c.fill()
+    surf.flush(); return surf
 
-def mac_icons(W, H, n):
-    icons = []; x = W-110; y = H-40
-    for i in range(n):
-        icons.append((x-14, y-64-36, x+64+14, y+8)); y -= 100
-        if y < 140: y = H-40; x -= 100
-    return icons
+def layout(W, H):
+    def icon(x, y): return (x-6, y-110-6, x+80+6, y+6)
+    ic = []
+    for i in range(2):
+        for j in range(4): ic.append(icon(20+i*100, H-14-j*112))
+    for (x, y) in [(560, 640), (660, 640), (560, 528), (660, 528), (1150, 780), (1500, 360)]:
+        ic.append(icon(x, y))
+    return ic
 
 if __name__ == '__main__':
-    out = sys.argv[1]; which = sys.argv[2:] or ['beach', 'meadow', 'winter', 'mb']
-    ic = mac_icons(5120, 1440, 7) + [(400-14, 900-36, 400+78, 900+72), (1500-14, 420-36, 1500+78, 420+72), (2600-14, 1100-36, 2600+78, 1100+72), (3300-14, 700-36, 3300+78, 700+72)]
-    for name in which:
-        if name == 'mb':
-            render(1512, 982, mac_icons(1512, 982, 5) + [(500, 300, 592, 408)], 'beach', 1.0).write_to_png(f'{out}/macbook-beach.png')
-        elif name.startswith('real'):
-            n = name.split('-')[1]; W, H = 2560, 1100; ic = []
-            def icon(x, y): return (x-6, y-135-6, x+95+6, y+6)
-            for i in range(4):
-                for j in range(2): ic.append(icon(20+i*131, H-10-j*218))
-            for (x, y) in [(900, 760), (1031, 760), (1600, 560), (2300, 980), (1350, 330)]:
-                ic.append(icon(x, y))
-            render(W, H, ic, n, .7).write_to_png(f'{out}/real-{n}.png')
-        elif name.startswith('crop'):
-            n = name.split('-')[1]; s = render(1800, 900, [(300, 380, 392, 488), (900, 520, 992, 628), (1300, 250, 1392, 358)], n, 1.5); s.write_to_png(f'{out}/crop-{n}.png')
-        else:
-            render(5120, 1440, ic, name, .3).write_to_png(f'{out}/ultrawide-{name}.png')
+    out = sys.argv[1]; names = sys.argv[2:] or list(THEMES)
+    W, H = 1800, 900
+    for n in names:
+        render(W, H, layout(W, H), n, 1.0).write_to_png(f'{out}/{n}.png')
     print('ok')

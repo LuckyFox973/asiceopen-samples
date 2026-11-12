@@ -289,6 +289,31 @@ enum SceneAssets {
         }
     }
 
+    // MARK: - Autá
+
+    static let carSize = CGSize(width: 16, height: 10)
+
+    /// Auto zhora, smer jazdy +x: tieň, karoséria, strecha, čelné a zadné sklo, svetlá.
+    static func car(_ color: UInt32) -> CGImage {
+        image(carSize) { ctx in
+            ctx.translateBy(x: 8, y: 5)
+            ctx.setFillColor(c(0x000000, 0.25))
+            ctx.fill(CGRect(x: -4.6, y: -3.1, width: 10.4, height: 5.4))
+            let body = CGPath(roundedRect: CGRect(x: -5.2, y: -2.5, width: 10.4, height: 5), cornerWidth: 1.4, cornerHeight: 1.4, transform: nil)
+            ctx.addPath(body)
+            ctx.setFillColor(c(color))
+            ctx.fillPath()
+            ctx.setFillColor(RGB(color).scaled(0.82).cg())
+            ctx.fill(CGRect(x: -2.2, y: -1.9, width: 3.6, height: 3.8))                // strecha
+            ctx.setFillColor(c(0x1E2A38, 0.85))
+            ctx.fill(CGRect(x: 1.4, y: -1.9, width: 1.6, height: 3.8))                 // čelné sklo
+            ctx.fill(CGRect(x: -3.4, y: -1.7, width: 1.1, height: 3.4))                // zadné sklo
+            ctx.setFillColor(c(0xFFF4C2))
+            ctx.fill(CGRect(x: 4.6, y: -2.1, width: 0.6, height: 1.0))
+            ctx.fill(CGRect(x: 4.6, y: 1.1, width: 0.6, height: 1.0))
+        }
+    }
+
     // MARK: - Motýle
 
     static let butterflySize = CGSize(width: 16, height: 16)
