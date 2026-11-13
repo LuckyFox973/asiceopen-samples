@@ -1,0 +1,1280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deskland · 沙滩（原型）</title>
+<!--
+  Deskland · 扁平插画风海边主题原型 v0.4（纯 WebGL2，2D，每帧直接计算）
+  画风参考：扁平色块 + 喷绘颗粒（丝网印刷感）
+  - 陆地场（CPU，图标变化时才算）：高斯融球 + 噪声扭曲 → 到海岸的距离 s；图标变化时岸线平滑过渡
+  - 海：远处青蓝 → 近岸薄荷绿的颗粒渐变；水面上不规则的浅色斑驳光斑（越近岸越密，缓慢流动）
+  - 浪：岸边一条细白线 + 海面一侧颗粒状水雾；稍远处一道向岸推进的淡浪线；海水周期性冲上沙滩
+  - 沙滩：几层淡紫灰 / 灰粉的湿沙色带（之前海浪到过的位置），往内陆过渡到奶白干沙
+  - 皮划艇：在深水里慢慢划，会绕开陆地
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1aa3c4; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.24); }
+  .icon.sel { background: rgba(0,120,215,.34); border-color: rgba(140,200,255,.7); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .icon.born { animation: born .45s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes born { from { opacity: 0; transform: scale(.6); } }
+  .glyph { width: 48px; height: 48px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.25)) drop-shadow(3px 6px 4px rgba(90,80,110,.25)); pointer-events: none; }
+  .glyph svg { width: 100%; height: 100%; display: block; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    pointer-events: none;
+  }
+
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(28,32,38,.6); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center; z-index: 40;
+  }
+  #taskbar .apps { display: flex; gap: 4px; }
+  #taskbar .app { width: 40px; height: 40px; border-radius: 4px; display: grid; place-items: center; }
+  #taskbar .app:hover { background: rgba(255,255,255,.08); }
+  #taskbar .app svg { width: 24px; height: 24px; }
+  #clock { position: absolute; right: 14px; color: #fff; font-size: 12px; line-height: 16px; text-align: right; }
+
+  #panel {
+    position: fixed; top: 14px; right: 14px; width: 284px; max-height: calc(100vh - var(--taskbar) - 28px); overflow: auto;
+    background: rgba(20,52,64,.74); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    color: #eef6f5; border: 1px solid rgba(255,255,255,.14); border-radius: 12px;
+    font-size: 12px; line-height: 1.4; box-shadow: 0 12px 32px rgba(0,0,0,.25); z-index: 50;
+  }
+  #panel, #panel.hidden { display: none; }
+  /* 壁纸模式（?wallpaper=1，由桌面宿主程序加载）：真实图标和任务栏由 Windows 自己画 */
+  body.wall #panel, body.wall #taskbar, body.wall #desktop { display: none; }
+  /* 预览模式（?preview=1，设置窗口里）：用半透明的方块示意真实图标的位置 */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(40,60,90,.28); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+  #panel header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 10px; }
+  #panel header b { font-size: 14px; letter-spacing: .06em; }
+  #panel header span { margin-left: 8px; opacity: .55; }
+  #panel.collapsed .body { display: none; }
+  .ibtn { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
+  .ibtn:hover { opacity: 1; }
+  #panel .body { padding: 0 14px 14px; }
+  .sec { margin-top: 12px; }
+  .sec > .t { opacity: .6; margin-bottom: 6px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); background: rgba(255,255,255,.06); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg button { background: none; border: 0; color: inherit; padding: 5px 0; border-radius: 5px; cursor: pointer; font: inherit; opacity: .75; white-space: nowrap; }
+  .seg button:hover { opacity: 1; }
+  .seg button.on { background: rgba(255,255,255,.17); opacity: 1; }
+  .slider { margin-top: 9px; }
+  .slider .row { display: flex; justify-content: space-between; }
+  .slider .row span:last-child { opacity: .6; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 4px 0 0; accent-color: #7fe3d6; }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+  .toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toggles input { accent-color: #7fe3d6; margin: 0; }
+  .btns { display: flex; gap: 6px; }
+  .btns button {
+    flex: 1; font: inherit; color: inherit; cursor: pointer; padding: 7px 0; border-radius: 7px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.1);
+  }
+  .btns button:hover { background: rgba(255,255,255,.18); }
+  #stats { margin-top: 12px; padding: 8px 10px; border-radius: 7px; background: rgba(0,0,0,.25); font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; line-height: 1.6; color: #d4e4e2; }
+  #stats .live { color: #7fe3d6; }
+  .hint { margin-top: 10px; opacity: .5; font-size: 11px; line-height: 1.6; }
+  #nogl { position: fixed; inset: 0; display: none; place-items: center; color: #fff; font-size: 16px; }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+
+<div id="taskbar">
+  <div class="apps">
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="M15 15l5 5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v1H2z" fill="#e09b1d"/><path d="M2 9h20v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z" fill="#ffc83d"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1b8fd6"/><path d="M6 13c1-5 11-6 12 0-3-2-8-2-9 2 0 2 2 3 4 3-4 1-7-1-7-5z" fill="#6fe37a" opacity=".9"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2.5" fill="#2b2b2b" stroke="#777"/><path d="M6 9l3 3-3 3M11 15h6" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></div>
+  </div>
+  <div id="clock"></div>
+</div>
+
+<aside id="panel" hidden>
+  <header>
+    <div><b>Deskland</b><span>沙滩 · 原型 v0.4</span></div>
+    <div><button class="ibtn" id="collapse" title="折叠">–</button></div>
+  </header>
+  <div class="body">
+    <div class="sec"><div class="t">桌面布局</div>
+      <div class="seg">
+        <button data-v="mine">仿你的桌面</button><button data-v="arranged">自动排列</button><button data-v="messy">杂乱</button><button data-v="minimal">极简</button>
+      </div>
+    </div>
+    <div class="sec" id="sliders"></div>
+    <div class="sec toggles">
+      <label><input type="checkbox" data-key="debug">显示海岸线</label>
+      <label><input type="checkbox" data-key="snap">对齐网格</label>
+      <label><input type="checkbox" data-key="cap30">限帧 30fps</label>
+    </div>
+    <div class="sec btns">
+      <button id="btnAdd">＋ 新建文件</button>
+      <button id="btnSeed">换一种岸线</button>
+    </div>
+    <div id="stats"></div>
+    <div class="hint">拖动图标，松手后海岸线会跟着移动<br>点击海面有涟漪 · Del 删除 · H 隐藏面板</div>
+  </div>
+</aside>
+<div id="nogl">当前浏览器不支持 WebGL2，无法运行原型。</div>
+
+<script src="beach-palms.js"></script>
+<script>
+'use strict';
+
+/* ======================================================================
+   参数
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const STEP = 5;
+const MORPH_MS = 1800;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');      // 壁纸模式：桌面宿主加载，消息来自宿主
+const PREVIEW = QS.has('preview');     // 预览模式：设置窗口里的缩略预览（iframe），消息来自父页面
+// 默认值要和 themes.json 里海边主题的 default 保持一致
+// 海浪（speed、runup、wave、spacing、waves）和 grain、quality 不再开放调节，固定为这里的值
+const P = {
+  sigma: 85, warp: 34, shallow: 260, shoal: 110,
+  speed: 22, runup: 120, wave: 1.6, spacing: 70, waves: 1, grain: 1, quality: 2,   // quality 2：按屏幕的实际像素画（150% 缩放时不再放大发糊）
+  kayaks: 2, birds: 3, palms: 4, debug: false, snap: true, cap30: true,
+};
+const DEFAULTS = Object.assign({}, P);
+const SLIDERS = [
+  { key: 'palms', label: '椰子树数量', min: 0, max: 10, step: 1, fmt: v => v + ' 棵' },
+  { key: 'sigma',   label: '离岸距离', min: 40,  max: 200, step: 1,    fmt: v => v + ' px', act: 'field' },
+  { key: 'warp',    label: '海岸曲折', min: 0,   max: 80,  step: 1,    fmt: v => v,         act: 'field' },
+  { key: 'shoal',   label: '透明浅滩', min: 0,   max: 300, step: 1,    fmt: v => v + ' px' },
+  { key: 'shallow', label: '浅海宽度', min: 120, max: 700, step: 1,    fmt: v => v + ' px' },
+  { key: 'kayaks',  label: '皮划艇',   min: 0,   max: 4,   step: 1,    fmt: v => v + ' 艘',  act: 'kayaks' },
+  { key: 'birds',   label: '海鸟',     min: 0,   max: 8,   step: 1,    fmt: v => v + ' 只',  act: 'birds' },
+];
+
+/* ======================================================================
+   图标与布局数据
+   ====================================================================== */
+const PAGE = '<path d="M12 4h17l9 9v29a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#fbfbfb" stroke="#c4c4c4"/><path d="M29 4v7a2 2 0 0 0 2 2h7z" fill="#dedede"/>';
+const LINES = '<path d="M24 20h10M24 25h10M24 30h10M24 35h10" stroke="#c9c9c9" stroke-width="1.6"/>';
+const badge = (color, text, size = 11) => `<rect x="4" y="21" width="19" height="19" rx="3" fill="${color}"/><text x="13.5" y="34.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="${size}" fill="#fff">${text}</text>`;
+const SVG = {
+  folder: '<path d="M4 12a3 3 0 0 1 3-3h11l4 4h19a3 3 0 0 1 3 3v2H4z" fill="#e09b1d"/><path d="M4 17h40v20a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z" fill="#ffc83d"/><path d="M4 17h40v2.5H4z" fill="#ffd978"/>',
+  docx: PAGE + LINES + badge('#185abd', 'W'),
+  xlsx: PAGE + '<path d="M24 19h11v17H24zM24 24.5h11M24 30h11M29.5 19v17" stroke="#9ac9a9" stroke-width="1.3" fill="none"/>' + badge('#107c41', 'X'),
+  pdf:  PAGE + LINES + badge('#d33a2c', 'PDF', 7.5),
+  cad:  PAGE + LINES + badge('#2a7fd4', 'DWG', 7),
+  txt:  PAGE + '<path d="M16 18h16M16 23h16M16 28h16M16 33h10" stroke="#9a9a9a" stroke-width="1.6"/>',
+  png:  PAGE + '<rect x="14" y="17" width="20" height="17" rx="1.5" fill="#8fd0f5"/><path d="M14 30l6-6 5 5 3-3 6 6v1.5a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 14 34z" fill="#3fa35a"/><circle cx="29" cy="21.5" r="2" fill="#fff4b8"/>',
+  shot: '<rect x="3" y="13" width="42" height="25" rx="1" fill="#1d2129" stroke="#f2f2f2" stroke-width="1.5"/><rect x="6" y="16" width="14" height="3" fill="#5b8def"/><rect x="6" y="21" width="22" height="2" fill="#6c7280"/><rect x="6" y="25" width="18" height="2" fill="#6c7280"/><rect x="31" y="16" width="11" height="18" fill="#2e3440"/>',
+  zip:  PAGE + '<path d="M22 4v4h3v3h-3v3h3v3h-3v3h3v3h-3" stroke="#8a6d3b" stroke-width="2" fill="none"/><rect x="20" y="26" width="7" height="8" rx="1" fill="#8a6d3b"/>',
+  bin:  '<path d="M12 14h24l-2.5 27a3 3 0 0 1-3 2.7H17.5a3 3 0 0 1-3-2.7z" fill="rgba(215,235,250,.55)" stroke="rgba(255,255,255,.9)" stroke-width="1.2"/><path d="M10 12.5h28" stroke="rgba(255,255,255,.95)" stroke-width="2.4" stroke-linecap="round"/><path d="M19 19l1 19M24 19v19M29 19l-1 19" stroke="rgba(255,255,255,.7)" stroke-width="1.2"/>',
+  pc:   '<rect x="5" y="8" width="38" height="26" rx="2" fill="#1f8fe0" stroke="#bfe3ff" stroke-width="1.5"/><path d="M5 30h38" stroke="#0d5fa8" stroke-width="3"/><path d="M19 34l-2 6h14l-2-6z" fill="#9aa7b4"/>',
+};
+const APP_COLORS = ['#e8553e','#2f7de1','#18a058','#8b5cf6','#f59e0b','#0ea5a4','#db2777','#334155','#16a34a','#2563eb'];
+function appSVG(name) {
+  let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return `<rect x="5" y="5" width="38" height="38" rx="9" fill="${APP_COLORS[h % APP_COLORS.length]}"/><path d="M5 14a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v6H5z" fill="#fff" opacity=".14"/>` +
+    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Microsoft YaHei,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
+}
+const glyphOf = (name, type) => type === 'app' ? appSVG(name) : SVG[type];
+
+const FILES = [
+  ['回收站','bin'], ['项目资料','folder'], ['2026 报价单.xlsx','xlsx'], ['产品需求.docx','docx'],
+  ['截图_0927.png','png'], ['合同扫描件.pdf','pdf'], ['新建文件夹','folder'], ['设计素材','folder'],
+  ['旅行照片','folder'], ['安装包.zip','zip'], ['会议纪要.docx','docx'], ['壁纸灵感','folder'],
+  ['周报.xlsx','xlsx'], ['草图.png','png'], ['旧备份','folder'], ['微信图片.png','png'], ['说明书.pdf','pdf'], ['简历.docx','docx'], ['支出表.xlsx','xlsx'], ['压缩备份.zip','zip'], ['素材图.png','png'], ['下载','folder'], ['表情包.png','png'], ['工资条.xlsx','xlsx'], ['租房合同.pdf','pdf'], ['日记.docx','docx'], ['桌面截图.png','png'],
+];
+const EXTRA = [
+  ['新建文本文档.txt','txt'], ['新建文件夹 (2)','folder'], ['发票.pdf','pdf'], ['数据导出.xlsx','xlsx'],
+  ['截图_0928.png','png'], ['备忘.txt','txt'], ['归档.zip','zip'], ['新建文件夹 (3)','folder'],
+];
+const APPS = ['回收站','此电脑','微信','飞书','钉钉','腾讯会议','网易云音乐','剪映','Photoshop','Obsidian','VS Code','Krita',
+  'AutoCAD','Rhino','KeyShot','百度网盘','Chrome','Blender','Figma','Notion','QQ','Steam','Eagle','OBS','Kimi','PureRef','EV录屏','NX 12.0','MarkText','Codex'];
+const MISC = [['projects','folder'],['游戏','folder'],['todolist','folder'],['OKR管理.xlsx','xlsx'],['固定成本.xlsx','xlsx'],
+  ['pdfarrange','app'],['stp.log','txt'],['零件.stp','txt'],['零件.3dm','png'],['预览','folder']];
+const RIGHT = [['plot.log','txt'],['工具','folder'],['归档.rar','zip'],['1685x128.png','png'],['微信图片.jpg','png'],['0914.png','png'],
+  ['微信图片 2.jpg','png'],['images.png','png'],['目录.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
+  ['板调整.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['新建文本 (2).txt','txt'],['ugstep21','txt'],['新建文本 (3).txt','txt'],
+  ['工作计划.txt','txt'],['微信图片 3.jpg','png'],['新建 DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['产品介绍.txt','txt'],
+  ['USER.pdf','pdf'],['新建文本.txt','txt'],['餐椅.pur','png'],['PAP-20.pdf','pdf'],['演示文稿.pptx','pdf'],['问题点.txt','txt']];
+function mineCells() {
+  const out = []; let a = 0, m = 0, rgt = 0, sh = 0;
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 10; r++) {
+    const name = APPS[a++];
+    out.push([c, r, name, name === '回收站' ? 'bin' : name === '此电脑' ? 'pc' : 'app']);
+  }
+  for (let r = 0; r < 10; r++) out.push([3, r, ...MISC[m++]]);
+  for (let r = 0; r < 5; r++) out.push([5, r, `零件结构 ${r + 1}.dwg`, 'cad']);
+  out.push([6, 0, '腿测试.bak', 'txt']);
+  for (const [c, r] of [[6,4],[6,5],[6,6],[6,7],[6,8],[7,3],[7,4],[7,5],[7,6],[7,7],[8,4],[8,5],[8,6],[9,2],[9,3],[9,4],[9,5],[9,6]])
+    out.push([c, r, `ScreenShot ${++sh}.png`, 'shot']);
+  for (const [c, r] of [[11,1],[11,2],[11,3],[12,1],[12,2],[12,3],[12,4],[13,1],[13,2],[13,3],[13,4],[14,1],[14,3],[14,4],[15,1],[15,6],
+    [16,4],[16,6],[17,4],[17,5],[17,6],[17,7],[19,4],[19,5],[19,8],[20,0],[20,4],[20,6],[21,0],[21,5],[21,6]]) {
+    const f = RIGHT[rgt++ % RIGHT.length]; out.push([c, r, f[0], f[1]]);
+  }
+  return out;
+}
+
+/* ======================================================================
+   CPU 噪声 + 可平铺噪声纹理
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k = 0) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, k), b = hash2(ix + 1, iy, k), c = hash2(ix, iy + 1, k), d = hash2(ix + 1, iy + 1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function fbm(x, y, k = 0) {
+  let a = 0.5, s = 0;
+  for (let i = 0; i < 4; i++) { s += a * vnoise(x, y, k + i * 7); x = x * 2.03 + 17.1; y = y * 2.03 + 17.1; a *= 0.5; }
+  return s;
+}
+function tileNoise(x, y, px, py, k) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const m = (v, p) => ((v % p) + p) % p;
+  const x0 = m(ix, px), x1 = m(ix + 1, px), y0 = m(iy, py), y1 = m(iy + 1, py);
+  const a = hash2(x0, y0, k), b = hash2(x1, y0, k), c = hash2(x0, y1, k), d = hash2(x1, y1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function tileFbm(u, v, periods, k) {
+  let s = 0, w = 0.5, tw = 0;
+  for (let i = 0; i < periods.length; i++) { s += w * tileNoise(u * periods[i], v * periods[i], periods[i], periods[i], k + i * 13); tw += w; w *= 0.5; }
+  return s / tw;
+}
+function makeNoiseImage() {
+  const S = 256, d = new Uint8Array(S * S * 4);
+  const chans = [[8, 16, 32, 64], [8, 16, 32, 64], [8, 16, 32], [16, 32, 64, 128]];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = (y * S + x) * 4;
+    for (let c = 0; c < 4; c++) {
+      let n = tileFbm(u, v, chans[c], 100 + c * 50);
+      d[i + c] = Math.min(Math.max((n - 0.5) * 1.9 + 0.5, 0), 1) * 255;
+    }
+  }
+  return { S, d };
+}
+
+/* ======================================================================
+   陆地场（CPU）：s = 到海岸的有符号距离（<0 陆地）
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
+function buildNoise() {
+  const N = Gw * Gh;
+  NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
+  for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) {
+    const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+    NZ.wx[i] = fbm(x * 0.0028, y * 0.0028, 1) - 0.47;
+    NZ.wy[i] = fbm(x * 0.0028, y * 0.0028, 2) - 0.47;
+  }
+}
+let fieldMs = 0;
+function computeField(rects) {
+  const t0 = performance.now();
+  const N = Gw * Gh, f1 = new Float32Array(N);
+  const sig = P.sigma, is1 = 1 / (sig * sig);
+  const wa = P.warp * 2.2, wmax = wa * 0.5;
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5 + wmax;
+    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    const chw = r.hw * 0.5, chh = r.hh * 0.5;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx;
+      const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
+      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
+    }
+  }
+  // 下限 = 计算范围边缘处的贡献值：范围内外算出的"离岸距离"一致，深海不会出现方框状的接缝
+  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+  }
+  fieldMs = performance.now() - t0;
+  return { s };
+}
+function sampleArr(a, x, y) {
+  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+
+/* ======================================================================
+   着色器
+   ====================================================================== */
+const VS = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const FS = `#version 300 es
+precision highp float;
+uniform sampler2D uNoise, uFA, uFB;
+uniform vec2 uRes, uGrid;
+uniform float uScale, uSeed, uStep, uMix, uTime, uSpeed, uRunup, uShallow, uShoal, uGrain, uDebug, uWave, uSigma, uSpacing, uWaves;
+uniform float uKayN;
+uniform vec4 uKay[4];          // x, y, 朝向, 划桨相位
+uniform vec4 uRip[6];
+uniform float uBirdN;
+uniform vec4 uBird[8];         // x, y, 朝向, 翅膀展开程度
+out vec4 o;
+
+// ---- 调色板（sRGB）----
+// 海：近岸 → 远处
+const vec3 SEA0 = vec3(0.74, 0.93, 0.87), SEA1 = vec3(0.47, 0.87, 0.84), SEA2 = vec3(0.17, 0.76, 0.81);
+const vec3 SEA3 = vec3(0.03, 0.66, 0.79), SEA4 = vec3(0.00, 0.56, 0.73);
+// 沙：干 → 最湿（淡紫灰）
+const vec3 SAND0 = vec3(0.97, 0.93, 0.88), SAND1 = vec3(0.91, 0.85, 0.84), SAND2 = vec3(0.82, 0.76, 0.79), SAND3 = vec3(0.71, 0.67, 0.75);
+const vec3 FOAM = vec3(0.98, 0.99, 0.98);
+// 湿沙：被水泡过的沙子，比干沙深一点、偏黄（岸边那一圈都往这个颜色靠）
+const vec3 WETSAND = vec3(0.93, 0.86, 0.72);
+
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+// 颗粒和反光点用的随机数（Dave Hoskins 的 hash12）：对整数格子坐标也足够"乱"，不会排成行列
+float hash2(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+vec4 N(vec2 p, float scale) { return texture(uNoise, p / scale + uSeed * 0.013); }
+float fieldS(sampler2D t, vec2 p) { return texture(t, (p / uStep + 0.5) / uGrid).r; }
+
+vec3 seaRamp(float v) {
+  v = clamp(v, 0.0, 1.0) * 4.0;
+  if (v < 1.0) return mix(SEA0, SEA1, v);
+  if (v < 2.0) return mix(SEA1, SEA2, v - 1.0);
+  if (v < 3.0) return mix(SEA2, SEA3, v - 2.0);
+  return mix(SEA3, SEA4, v - 3.0);
+}
+vec3 sandRamp(float v) {
+  v = clamp(v, 0.0, 1.0) * 3.0;
+  if (v < 1.0) return mix(SAND0, SAND1, v);
+  if (v < 2.0) return mix(SAND1, SAND2, v - 1.0);
+  return mix(SAND2, SAND3, v - 2.0);
+}
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
+// Worley（细胞）噪声：x = F1，y = F2。F2 - F1 很小的地方是细胞边界 → 用来画光网、碎沫网
+vec2 worley(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  float d1 = 8.0, d2 = 8.0;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(float(x), float(y)), c = i + g;
+    vec2 r = g + vec2(hash(c + uSeed), hash(c + uSeed + 17.3)) * 0.8 + 0.1 - f;
+    float d = dot(r, r);
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+  }
+  return vec2(sqrt(d1), sqrt(d2));
+}
+// 皮划艇船身：两头尖的梭形，返回有符号距离（<0 在船内）
+float hullSD(vec2 q) {
+  float L = 22.0, Wd = 5.4;
+  float t = clamp(q.x / L, -1.0, 1.0);
+  float w = Wd * (1.0 - t * t);
+  return max(abs(q.y) - w, abs(q.x) - L);
+}
+float segSD(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h); }
+// 桨：一根细杆 + 两头红色桨叶
+vec2 paddleSD(vec2 q, float ph) {
+  float a = 1.5708 + sin(ph) * 0.55;
+  vec2 dir = vec2(cos(a), sin(a)) , c = vec2(0.5, 0.0);
+  float shaft = segSD(q, c - dir * 13.0, c + dir * 13.0) - 0.7;
+  vec2 b1 = q - (c + dir * 13.5), b2 = q - (c - dir * 13.5);
+  mat2 r = rot(-a);
+  vec2 l1 = r * b1, l2 = r * b2;
+  float blade = min(length(l1 / vec2(3.6, 1.6)) - 1.0, length(l2 / vec2(3.6, 1.6)) - 1.0) * 1.6;
+  return vec2(shaft, blade);
+}
+// 海鸥（俯视，x 朝前）：返回 (身子, 翅膀, 翅膀上的位置 0 根 → 1 尖)；span = 翅膀展开程度，扇动时变短
+vec3 gullSD(vec2 q, float span) {
+  float body = (length((q - vec2(0.8, 0.0)) / vec2(6.2, 1.9)) - 1.0) * 1.9;
+  float tail = max(abs(q.y) - 1.4 - (-q.x - 4.0) * 0.25, max(-q.x - 8.5, q.x + 4.0));
+  float y = abs(q.y), reach = 15.0 * span;
+  float u = clamp((y - 1.0) / reach, 0.0, 1.0);
+  float lead = 1.0 + 1.3 * sin(u * 3.14159) - 4.0 * u * u;     // 前缘：中段微微前凸，翅尖向后掠
+  float chord = mix(4.4, 1.3, u);
+  float wing = max(max(q.x - lead, lead - chord - q.x), y - reach - 1.0);
+  return vec3(min(body, tail), wing, u);
+}
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  float t = uTime;
+  // 喷绘颗粒：约 1.3px 的随机点（静止，像印刷纸面上的颗粒）
+  vec2 gp = floor(p * (0.78 * max(uScale, 1.0)));   // 按屏幕的实际像素取颗粒（高分屏上不会变成一块块的小方块）
+  // 用 hash2：旧 hash 对整数坐标每几十像素循环一次，最亮的颗粒会排成一格格的点阵
+  float g1 = hash2(gp + 0.5), g2 = hash2(gp + 7.3);
+  float gAmt = uGrain;
+
+  float s0 = mix(fieldS(uFA, p), fieldS(uFB, p), uMix);
+  float s = s0 + (N(p, 700.0).r - 0.5) * 10.0;
+
+  // 浪的时钟：沿岸只有大尺度的先后差异，一长段海岸整齐地涌上来
+  float wv = uWave;                                // 浪的大小：放大线宽、水雾
+  float lam = uSpacing;                            // 浪的间距（px）
+  // 沿岸的先后差异要很平缓：用最粗的一层噪声、放大尺度。原来 r 通道带 37px 的细节，
+  // 沿岸走一百来像素浪的节奏就差四分之一拍，新浪的侧边从岸线陡直地立起来，两拍交界处白边戛然而止（像个缺口）
+  float along = N(p, 4200.0).b * 1.2;
+  float u = t * uSpeed / lam + along;             // 每 1.0 = 一道浪
+  float fu = fract(u), cyc = floor(u);
+
+  // 浪的能量：只有开阔海面才起浪。往陆地、往海各探一段：
+  // 陆地太窄（探到对面的水）或水域太小（探不到深水）→ 浪减弱到平静
+  vec2 gr = vec2(dFdx(s0), -dFdy(s0));
+  vec2 nrm = length(gr) > 1e-4 ? normalize(gr) : vec2(0.0, 1.0);
+  float sIn = mix(fieldS(uFA, p - nrm * 45.0), fieldS(uFB, p - nrm * 45.0), uMix);
+  float sOut = mix(fieldS(uFA, p + nrm * 70.0), fieldS(uFB, p + nrm * 70.0), uMix);
+  float energy = mix(ss(2.0, -18.0, sIn), 1.0, ss(15.0, 40.0, s)) * ss(25.0, 70.0, sOut);
+  // 沙滩上（冲上来的薄水、湿沙带）用"岸线处"的能量：沿法线回到岸线上再往两边探。
+  // 不能按像素自己的位置探——越往岸上离开阔水面越远、能量越小，薄水冲多远就取决于像素自己在哪，
+  // 岸线一拐弯探的方向变得快，前沿就出现台阶和缺口
+  // sW：薄水层用的"离岸距离"。往岸上走，岸线急拐弯处的等距线会收成尖角（湿痕、水膜前沿出现楔形），
+  // 所以用周围 10px 的平均值把尖角磨圆；贴着水边时仍用原值，水膜和岸线对得上
+  float shoreE = 0.0, sW = s;
+  if (s < 4.0 && s > -uSigma * 0.78 - 12.0) {         // 只有薄水冲得到的那一条沙滩需要（再往里的干沙不用算）
+    // 法线也用前后左右的差来算：dFdx 在场纹理每个 5px 格子边上会跳，拐角处探的位置跟着跳
+    #define SF(q) mix(fieldS(uFA, q), fieldS(uFB, q), uMix)
+    float fR = SF(p + vec2(10.0, 0.0)), fL = SF(p - vec2(10.0, 0.0)), fD = SF(p + vec2(0.0, 10.0)), fU = SF(p - vec2(0.0, 10.0));
+    vec2 g10 = vec2(fR - fL, fD - fU);
+    vec2 n10 = length(g10) > 1e-3 ? normalize(g10) : nrm;
+    vec2 sp = p - n10 * s0;
+    float eIn = SF(sp - n10 * 45.0), eOut = SF(sp + n10 * 70.0);
+    shoreE = ss(2.0, -18.0, eIn) * ss(25.0, 70.0, eOut);
+    sW = mix(s, (fR + fL + fD + fU) * 0.25 + (s - s0), ss(-2.0, -16.0, s));
+  }
+
+  vec3 col;
+  if (s > 2.0) {
+    // ---------- 海 ----------
+    float depth = pow(clamp(max(s - uShoal * 0.45, 0.0) / (uShallow * 1.3), 0.0, 1.0), 0.62);
+    col = seaRamp(depth + (g1 - 0.5) * 0.09 * gAmt);                               // 颗粒渐变
+
+    // 斑驳光斑：扭曲后的噪声取阈值，边缘用颗粒打散；越近岸越密；缓慢流动
+    vec2 drift = vec2(t * 2.2, t * 0.9);
+    // 海面不画纹理：只有极淡、缓慢流动的大块明暗；深海零星闪烁的阳光反光点
+    float deepK = ss(uShallow * 0.35, uShallow * 1.1, s);
+    col *= 1.0 + (N(p + drift * 4.0, 1600.0).r - 0.5) * 0.07 * ss(0.0, uShoal + 40.0, s);
+    // 阳光反光点：两层大小不同、互相旋转错开的格子，每格随机放一个点（位置、大小、闪烁节奏都随机），
+    // 再按大尺度噪声成片聚集 → 看不出格子
+    float glitter = ss(0.32, 0.72, N(p + drift * 3.0, 520.0).g) * deepK;
+    float spark = 0.0;
+    for (int L = 0; L < 2; L++) {
+      float fl = float(L), cs = L == 0 ? 23.0 : 37.0;
+      mat2 R = rot(L == 0 ? 0.62 : -1.13);
+      vec2 q = R * p / cs + fl * 17.3;
+      vec2 cell = floor(q), f = fract(q);
+      vec2 seedc = cell + fl * 51.7 + uSeed * 0.1;
+      if (hash2(seedc) > (L == 0 ? 0.11 : 0.16) * glitter) continue;
+      vec2 c = 0.15 + 0.7 * vec2(hash2(seedc + 1.3), hash2(seedc + 2.9));
+      float life = fract(t * (0.3 + 0.35 * hash2(seedc + 8.1)) + hash2(seedc + 5.7));
+      float tw = ss(0.0, 0.1, life) * (1.0 - ss(0.2, 0.45, life));
+      float r = 0.7 + 0.9 * hash2(seedc + 3.3);
+      spark = max(spark, (1.0 - ss(r * 0.5, r * 1.5, length((f - c) * cs))) * tw);
+    }
+    col = mix(col, vec3(0.95, 1.0, 1.0), spark * 0.85);
+
+    // 透明浅滩：水浅到能看见沙底，越往外越被青绿色盖住（过渡同样用颗粒喷出来）
+    float shoal = uShoal;
+    float k = clamp(ss(shoal * 0.15, shoal * 1.25, s) + (g2 - 0.5) * 0.16 * gAmt, 0.0, 1.0);
+    if (k < 1.0) {
+      vec3 bed = mix(vec3(0.97, 0.91, 0.79), vec3(0.88, 0.90, 0.77), ss(0.0, shoal, s));
+      vec3 tint = mix(vec3(0.93, 0.99, 0.96), vec3(0.62, 0.92, 0.88), ss(0.0, shoal * 0.9, s));
+      col = mix(bed * tint, col, k);
+    }
+    // 贴岸的一段水底是湿沙：从岸线处的湿沙色慢慢过渡到浅滩的沙底色，和沙滩那边接得上，水里没有一道边
+    col = mix(col, mix(sandRamp((g1 - 0.5) * 0.1 * gAmt), WETSAND, 0.6), 1.0 - ss(2.0, 38.0, s));
+
+    // 皮划艇的影子（清澈的水，影子落在海底）
+    float shadow = 0.0;
+    for (int i = 0; i < 4; i++) {
+      if (float(i) >= uKayN) break;
+      vec4 k = uKay[i];
+      vec2 q2 = rot(-k.z) * (p - k.xy - vec2(8.0, 13.0));
+      float sd = hullSD(q2);
+      vec2 pd = paddleSD(q2, k.w);
+      shadow = max(shadow, ss(1.6, -1.6, min(sd, min(pd.x, pd.y))));
+    }
+    col = mix(col, col * vec3(0.62, 0.78, 0.84), shadow * 0.7);
+
+    // 涟漪：细白圈
+    float rip = 0.0;
+    for (int i = 0; i < 6; i++) {
+      vec4 r = uRip[i];
+      if (r.w <= 0.0) continue;
+      float dist = length(p - r.xy), rad = r.z * 80.0;
+      rip = max(rip, (1.0 - ss(0.8, 2.0, abs(dist - rad))) * exp(-r.z * 1.4) * r.w);
+      rip = max(rip, (1.0 - ss(0.6, 1.6, abs(dist - rad * 0.6))) * exp(-r.z * 1.8) * r.w * 0.6);
+    }
+    col = mix(col, FOAM, step(g2, rip * 0.95));
+
+    // ---------- 海里的浪 ----------
+    float dd = s - 2.0;
+    // 远一点的浪线：向岸推进，到岸的那一刻正好推出一层薄水
+    float ph = (s + t * uSpeed) / lam + along;
+    float fr = fract(ph);
+    float dpx = min(fr, 1.0 - fr) * lam;
+    // 浪从远处推进到岸边：离岸约 1.35 个浪距处淡淡出现，越近越实（海里平时只有一道浪线）；一直推到水边才消失（不提前淡出，
+    // 否则浪线没到岸就没了，到岸那一下的水雾像是凭空冒出来的）
+    float vis = (1.0 - ss(lam * 0.45, lam * 1.35, s)) * ss(0.0, 4.0, dd) * energy;
+    // 靠近岸开始破碎：浪线变粗、更白，身后的颗粒水雾更多
+    float brk = 1.0 - ss(8.0, 55.0, s);
+    float cw = wv * (1.0 + 0.8 * brk);
+    float crest = (1.0 - ss(0.7 * cw, 1.9 * cw, dpx)) * vis * (0.55 + 0.4 * brk);
+    float crestSpray = exp(-fr * lam / (7.0 * cw)) * vis * (0.25 + 0.4 * brk);        // 浪线后方的颗粒水雾
+    // 浪到岸的那一刻再轻轻迸一下水雾（只是推上来的浪的延续，不是主角）
+    float burst = exp(-fu * 4.5) * ss(0.0, 0.04, fu);
+    float spray = exp(-dd / (6.0 * wv)) * burst * energy * 0.45;
+    float foam = max(crest, step(g2, max(spray, crestSpray)));
+    col = mix(col, FOAM, foam);
+  } else {
+    // ---------- 沙滩（干沙 + 靠水的一窄条常湿带）----------
+    float wet = ss(-7.0 - 3.0 * shoreE, 1.0, s) * 0.2;
+    col = mix(sandRamp((g1 - 0.5) * 0.1 * gAmt), WETSAND, wet * 3.0);
+    col *= 1.0 - 0.03 * ss(0.4, 0.8, N(p, 900.0).r) * (1.0 - wet);               // 干沙上极轻的大块明暗
+  }
+
+  // ---------- 一层层冲上沙滩的薄水 ----------
+  // 同时有 3 层：各自推进 → 停住 → 回落，最高点各不相同；前沿一道颗粒白边，退去后留下慢慢消失的湿痕
+  // 冲得再高也不淹到图标：图标边缘大约在 s ≈ -离岸距离 处，留出余量
+  // ×0.25：开阔岸边冲浪幅度 120 时约冲上 30px，和原来（按像素位置探能量时实际达到的）一样
+  float reachBase = min(uRunup * 0.25 * shoreE * (0.85 + 0.3 * N(p, 900.0).g), uSigma * 0.78);
+  // 薄水、湿痕不在岸线处一刀切：往海里再延伸一段、慢慢淡出（开阔岸边才有，小水塘里没有浪）
+  float wk = (1.0 - ss(2.0, 38.0, s)) * mix(1.0, energy, ss(2.0, 10.0, s));
+  if ((s < 4.0 && reachBase > 0.5) || (s >= 4.0 && wk > 0.01)) {
+    const vec3 FILM = WETSAND, MARK = WETSAND * 0.97;
+    float onSand = step(s, 4.0);                                                  // 前沿白边只画在沙滩上
+    // 薄水退去时留下的网状碎沫（跟着回流的水往海里漂）
+    vec2 wl = worley((p - nrm * fu * 8.0) / 7.0);
+    float laceNet = (1.0 - ss(0.03, 0.1, wl.y - wl.x)) * ss(0.4, 0.62, N(p + vec2(t * 2.0, 0.0), 120.0).g);
+    float wetMem = 0.0, filmA = 0.0;
+    vec4 layers[3];
+    for (int j = 0; j < 3; j++) {
+      float a = fu + float(j);                                                    // 这一层的"年龄"（单位：一道浪的周期）
+      float amp = reachBase * (0.5 + 0.5 * hash(vec2(cyc - float(j), 3.7)));
+      float front = a < 0.45 ? mix(3.0, -amp, 1.0 - pow(1.0 - a / 0.45, 2.2))    // 推进：先快后慢
+                             : mix(-amp, 3.0, ss(0.45, 1.4, a));                  // 回落
+      float reached = ss(-amp - 4.0, -amp + 12.0, sW);                         // 边缘很软：不留一道线
+      wetMem = max(wetMem, reached * (1.0 - ss(0.45, 2.8, a)) * ss(0.2, 0.45, a));
+      float alpha = a < 0.45 ? 0.42 : 0.42 * (1.0 - ss(0.45, 1.4, a));
+      // 回落的水边会越退越薄、没有清楚的边：上沿逐渐羽化，和后面冲上来的浪交叉时不会出现一个硬角（缺口）
+      float feather = 1.0 + 16.0 * ss(0.45, 1.1, a);
+      filmA = max(filmA, ss(front - 1.0, front + feather, sW) * alpha * 1.6);
+      layers[j].w = feather;
+      layers[j].xyz = vec3(front, a, amp);
+    }
+    // 湿痕：水到过的地方沙子更深一点（偏黄的湿沙色），只是淡淡一层
+    col = mix(col, MARK, wetMem * 0.18 * wk);
+    // 冲上来的薄水：几层重叠的地方只算最厚的那层（一层层相乘会越叠越暗）。
+    // 被水盖住的沙子变成偏黄的湿沙色（一部分相乘、保留下面沙子的颗粒；一部分直接往湿沙色靠）。
+    // 不能乘青绿：偏粉的沙子乘上青绿会互相抵消成灰色，岸边一圈发暗
+    col = mix(col, mix(col * vec3(0.98, 0.96, 0.90), FILM, 0.6), filmA * wk);
+    // 由老到新画薄水层的碎沫和白边
+    for (int j = 2; j >= 0; j--) {
+      float front = layers[j].x, a = layers[j].y, amp = layers[j].z;
+      float cov = ss(front - 1.0, front + layers[j].w, sW);
+      float lace = laceNet * cov * ss(0.4, 0.6, a) * (1.0 - ss(0.7, 1.4, a)) * wk;
+      col = mix(col, FOAM, lace * 0.75);
+      float edgeK = a < 0.45 ? 1.0 : 1.0 - ss(0.45, 1.05, a);
+      float d = sW - front;
+      float lineE = (1.0 - ss(0.8 * wv, 1.9 * wv, abs(d - 0.9 * wv))) * edgeK * onSand;    // 前沿白边
+      float sprayE = exp(-max(d, 0.0) / (5.0 * wv)) * cov * edgeK * 0.5 * onSand;         // 白边身后的颗粒水雾
+      col = mix(col, FOAM, max(lineE * 0.95, step(g1, sprayE)));
+    }
+  }
+
+  // ---------- 皮划艇 ----------
+  for (int i = 0; i < 4; i++) {
+    if (float(i) >= uKayN) break;
+    vec4 k = uKay[i];
+    vec2 q = rot(-k.z) * (p - k.xy);
+    if (dot(q, q) > 900.0) continue;
+    float sd = hullSD(q);
+    vec2 pd = paddleSD(q, k.w);
+    // 桨在船下面的部分先画
+    vec3 kc = col;
+    float a = 0.0;
+    float mh = ss(0.7, -0.7, sd);
+    if (mh > 0.0) {
+      float tt = clamp(q.x / 22.0, -1.0, 1.0);
+      float wd = 5.4 * (1.0 - tt * tt);
+      vec3 hull = mix(vec3(0.99, 0.84, 0.16), vec3(1.0, 0.93, 0.45), 1.0 - ss(0.2, 0.7, abs(q.y) / max(wd, 0.5)));
+      hull = mix(hull, vec3(0.90, 0.64, 0.10), ss(0.78, 1.0, abs(q.y) / max(wd, 0.5)));
+      // 甲板上的白色小圆点（舱口盖）
+      hull = mix(hull, vec3(0.97, 0.96, 0.9), 1.0 - ss(1.0, 1.6, length(q - vec2(13.0, 0.0))));
+      hull = mix(hull, vec3(0.97, 0.96, 0.9), 1.0 - ss(1.0, 1.6, length(q - vec2(-12.0, 0.0))));
+      // 座舱
+      hull = mix(hull, vec3(0.30, 0.24, 0.20), 1.0 - ss(0.0, 0.6, length((q - vec2(-1.0, 0.0)) / vec2(6.0, 2.8)) - 1.0));
+      kc = mix(kc, hull, mh); a = max(a, mh);
+    }
+    // 人：橙色救生衣 + 深色头
+    float body = ss(0.5, -0.5, length(q - vec2(-1.5, 0.0)) - 3.3);
+    kc = mix(kc, vec3(0.96, 0.55, 0.18), body);
+    float head = ss(0.5, -0.5, length(q - vec2(0.2, 0.0)) - 2.0);
+    kc = mix(kc, vec3(0.22, 0.17, 0.16), head);
+    // 桨
+    float sh = ss(0.5, -0.5, pd.x), bl = ss(0.5, -0.5, pd.y);
+    kc = mix(kc, vec3(0.28, 0.24, 0.26), sh);
+    kc = mix(kc, vec3(0.90, 0.28, 0.22), bl);
+    col = kc;
+  }
+
+  // ---------- 海鸟：白身子、浅灰翅膀、黑翅尖的海鸥，飞得高，影子落得远 ----------
+  for (int i = 0; i < 8; i++) {
+    if (float(i) >= uBirdN) break;
+    vec4 b = uBird[i];
+    vec2 d0 = p - b.xy, d1 = d0 - vec2(34.0, 55.0);
+    if (dot(d1, d1) < 400.0) {
+      vec3 g = gullSD(rot(-b.z) * d1, b.w);
+      col = mix(col, col * vec3(0.70, 0.74, 0.84), ss(1.8, -1.8, min(g.x, g.y)) * 0.28);
+    }
+    if (dot(d0, d0) < 400.0) {
+      vec3 g = gullSD(rot(-b.z) * d0, b.w);
+      vec3 wingC = mix(vec3(0.80, 0.84, 0.88), vec3(0.20, 0.22, 0.26), ss(0.72, 0.8, g.z));
+      col = mix(col, wingC, ss(0.6, -0.6, g.y));
+      col = mix(col, vec3(0.99, 0.99, 0.98), ss(0.6, -0.6, g.x));
+      col = mix(col, vec3(0.98, 0.78, 0.22), ss(0.5, -0.5, length(rot(-b.z) * d0 - vec2(7.2, 0.0)) - 0.9));   // 黄嘴
+    }
+  }
+
+  if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(s0)));
+  // 印刷感：整体再叠一层极轻的颗粒
+  col *= 1.0 + (g2 - 0.5) * 0.035 * gAmt;
+  o = vec4(col, 1.0);
+}`;
+
+/* ======================================================================
+   WebGL
+   ====================================================================== */
+const cv = document.getElementById('art');
+const gl = cv.getContext('webgl2', { antialias: false });
+if (!gl) document.getElementById('nogl').style.display = 'grid';
+function program(fs, vs = VS) {
+  const mk = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); throw new Error('shader'); }
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p));
+  const U = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, ''); U[nm] = gl.getUniformLocation(p, nm); }
+  return { p, U };
+}
+const PR = program(FS);
+const palmPR = program(FS.slice(0, FS.indexOf('void main() {')) + BEACH_PALM_FS, BEACH_PALM_VS);
+gl.bindVertexArray(gl.createVertexArray());
+
+let noiseTex = null;
+function buildNoiseTex() {
+  const { S, d } = makeNoiseImage();
+  noiseTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, d);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+}
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+function toHalf(v) {
+  f32[0] = v; const x = u32[0];
+  const sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112, m = x & 0x7fffff;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7c00;
+  return sign | (e << 10) | (m >>> 13);
+}
+// 两张陆地场纹理：from → to 之间插值
+const ftex = [null, null];
+let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null;
+function allocField() {
+  for (let i = 0; i < 2; i++) {
+    if (ftex[i]) gl.deleteTexture(ftex[i]);
+    ftex[i] = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, Gw, Gh, 0, gl.RED, gl.HALF_FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+}
+function uploadField(i, Fd) {
+  const d = new Uint16Array(Gw * Gh);
+  for (let k = 0; k < d.length; k++) d[k] = toHalf(Fd.s[k]);
+  gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
+  // R16F 每像素 2 字节；奇数网格宽度时每行不是 4 的倍数，按实际紧凑数据上传。
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RED, gl.HALF_FLOAT, d);
+}
+
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+function commit(fromEmpty = false) {
+  const nf = computeField(iconRects());
+  const target = 1 - toI;
+  if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
+  else FA = FB;
+  FB = nf;
+  uploadField(target, FB);
+  fromI = toI; toI = target;
+  morphT0 = performance.now();
+  morphDur = fromEmpty ? 2600 : MORPH_MS;
+}
+function refresh() {
+  FA = FB = computeField(iconRects());
+  uploadField(toI, FB);
+  fromI = toI; morphT0 = -1e9;
+}
+
+/* ======================================================================
+   皮划艇：在深水里慢慢划，提前避开陆地和其他船
+   ====================================================================== */
+const kayaks = [];
+let curMix = 1;
+const curS = (x, y) => FB ? sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.s, x, y) * curMix : 999;
+function spawnKayak() {
+  for (let t = 0; t < 400; t++) {
+    const x = 60 + Math.random() * (W - 120), y = 60 + Math.random() * (H - TASKBAR - 120);
+    if (curS(x, y) > 170 && kayaks.every(k => Math.hypot(k.x - x, k.y - y) > 160))
+      return { x, y, h: Math.random() * Math.PI * 2, v: 7 + Math.random() * 4, ph: Math.random() * 6, wander: Math.random() * 100, fade: 0 };
+  }
+  return null;
+}
+function syncKayaks() {
+  const want = Math.max(0, Math.min(4, Math.round(P.kayaks)));
+  while (kayaks.length > want) kayaks.pop();
+  while (kayaks.length < want) { const k = spawnKayak(); if (!k) break; kayaks.push(k); }
+}
+function stepKayaks(dt, now) {
+  const clearance = 64; // 船身长 44px，连同划桨留出安全间距。
+  const plans = [];
+  for (let i = 0; i < kayaks.length; i++) {
+    const k = kayaks[i];
+    let heading = k.h;
+    const ax = k.x + Math.cos(k.h) * 70, ay = k.y + Math.sin(k.h) * 70;
+    const margin = ax < 40 || ay < 40 || ax > W - 40 || ay > H - TASKBAR - 40;
+    if (curS(ax, ay) < 150 || margin) {
+      // 转向更深的水 / 画面中间
+      let gx = curS(k.x + 10, k.y) - curS(k.x - 10, k.y), gy = curS(k.x, k.y + 10) - curS(k.x, k.y - 10);
+      if (margin) { gx += (W / 2 - k.x) * 0.02; gy += ((H - TASKBAR) / 2 - k.y) * 0.02; }
+      let d = Math.atan2(gy, gx) - k.h;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      heading += Math.sign(d) * Math.min(Math.abs(d), 0.7 * dt);
+    } else {
+      k.wander += dt * 0.3;
+      heading += (vnoise(k.wander, i * 10) - 0.5) * 0.25 * dt;
+    }
+    const fx = Math.cos(k.h), fy = Math.sin(k.h);
+    let steerX = Math.cos(heading), steerY = Math.sin(heading), speed = 1, avoiding = false;
+    for (let j = 0; j < kayaks.length; j++) {
+      if (i === j) continue;
+      const other = kayaks[j], dx = other.x - k.x, dy = other.y - k.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > 210) continue;
+      const rvx = Math.cos(other.h) * other.v - fx * k.v;
+      const rvy = Math.sin(other.h) * other.v - fy * k.v;
+      const closing = dx * rvx + dy * rvy;
+      const ahead = Math.max(0, Math.min(7, -closing / Math.max(.01, rvx * rvx + rvy * rvy)));
+      const closest = Math.hypot(dx + rvx * ahead, dy + rvy * ahead);
+      const risk = Math.max(0, Math.min(1, (110 - distance) / 46),
+        closing < 0 ? (1 - Math.min(1, closest / 90)) * (1 - ahead / 8) : 0);
+      if (risk <= 0) continue;
+      avoiding = true;
+      // 相向时都向自己的右侧绕行；交叉或追尾时同时远离另一艘船。
+      const awayX = distance > .001 ? -dx / distance : -fy;
+      const awayY = distance > .001 ? -dy / distance : fx;
+      steerX += (awayX * 2 - fy * 1.6) * risk;
+      steerY += (awayY * 2 + fx * 1.6) * risk;
+      if (dx * fx + dy * fy > 0 && closing < 0)
+        speed = Math.min(speed, .25 + .75 * Math.max(0, Math.min(1, (distance - clearance) / 50)));
+    }
+    if (avoiding) {
+      const d = Math.atan2(Math.sin(Math.atan2(steerY, steerX) - k.h), Math.cos(Math.atan2(steerY, steerX) - k.h));
+      heading = k.h + Math.sign(d) * Math.min(Math.abs(d), dt);
+    }
+    k.ph += dt * 2.4;
+    const v = k.v * (0.75 + 0.25 * Math.abs(Math.sin(k.ph))) * speed; // 划一下快一下
+    plans.push({ h: heading, dx: Math.cos(heading) * v * dt, dy: Math.sin(heading) * v * dt });
+  }
+  // 根据同一帧的路线检查最近间距。极端相遇时减速，继续转向，不推开或瞬移船只。
+  for (let pass = 0; pass < kayaks.length; pass++) {
+    for (let i = 0; i < kayaks.length; i++) for (let j = i + 1; j < kayaks.length; j++) {
+      const a = plans[i], b = plans[j], dx = kayaks[j].x - kayaks[i].x, dy = kayaks[j].y - kayaks[i].y;
+      const vx = b.dx - a.dx, vy = b.dy - a.dy, vv = vx * vx + vy * vy;
+      const dot = dx * vx + dy * vy;
+      if (dot >= 0 || vv < 1e-12) continue;
+      const closestAt = Math.max(0, Math.min(1, -dot / vv));
+      if (Math.hypot(dx + vx * closestAt, dy + vy * closestAt) >= clearance) continue;
+      const gap = dx * dx + dy * dy - clearance * clearance;
+      const fraction = gap <= 0 ? 0 : Math.max(0, Math.min(1, gap / (-dot + Math.sqrt(Math.max(0, dot * dot - vv * gap))) - .001));
+      a.dx *= fraction; a.dy *= fraction; b.dx *= fraction; b.dy *= fraction;
+    }
+  }
+  for (let i = kayaks.length - 1; i >= 0; i--) {
+    const k = kayaks[i], plan = plans[i];
+    k.h = plan.h; k.x += plan.dx; k.y += plan.dy;
+    if (curS(k.x, k.y) < 40) { const n = spawnKayak(); if (n) kayaks[i] = n; else kayaks.splice(i, 1); }   // 被陆地"吞掉"就换个地方出现
+  }
+}
+
+/* ======================================================================
+   海鸟：在画面上空滑翔，时而盘旋、时而扇几下翅膀；飞出画面会兜回来
+   ====================================================================== */
+const birds = [];
+const turnToward = (h, target, rate) => { let d = target - h; d = Math.atan2(Math.sin(d), Math.cos(d)); return h + Math.sign(d) * Math.min(Math.abs(d), rate); };
+function spawnBird(fromEdge) {
+  const H2 = H - TASKBAR;
+  let x = Math.random() * W, y = Math.random() * H2;
+  if (fromEdge) {                                    // 从画面外飞进来
+    const side = Math.floor(Math.random() * 4);
+    if (side === 0) x = -40; else if (side === 1) x = W + 40; else if (side === 2) y = -40; else y = H2 + 40;
+  }
+  const h = Math.atan2(H2 / 2 - y, W / 2 - x) + (Math.random() - 0.5) * 1.2;
+  return { x, y, h, v: 36 + Math.random() * 16, mode: 0, modeT: 2 + Math.random() * 4, ph: 0, flap: false, flapT: Math.random() * 3, wander: Math.random() * 100 };
+}
+function syncBirds(fromEdge = true) {
+  const want = Math.max(0, Math.min(8, Math.round(P.birds)));
+  while (birds.length > want) birds.pop();
+  while (birds.length < want) birds.push(spawnBird(fromEdge));
+}
+function stepBirds(dt) {
+  const H2 = H - TASKBAR, m = 90;
+  birds.forEach((b, i) => {
+    if ((b.modeT -= dt) <= 0) {                       // 换一种飞法：直飞 / 向左或向右盘旋
+      b.mode = Math.random() < 0.4 ? (Math.random() < 0.5 ? -1 : 1) : 0;
+      b.modeT = b.mode ? 4 + Math.random() * 6 : 3 + Math.random() * 5;
+    }
+    b.wander += dt * 0.4;
+    if (b.x < -m || b.x > W + m || b.y < -m || b.y > H2 + m)
+      b.h = turnToward(b.h, Math.atan2(H2 / 2 - b.y, W / 2 - b.x), 1.3 * dt);
+    else b.h += (b.mode * 0.55 + (vnoise(b.wander, i * 7.3) - 0.5) * 0.8) * dt;
+    if ((b.flapT -= dt) <= 0) { b.flap = !b.flap; b.flapT = b.flap ? 0.8 + Math.random() * 1.2 : 2.5 + Math.random() * 4; }
+    if (b.flap || Math.cos(b.ph) < 0.97) b.ph = (b.ph + dt * 9) % (Math.PI * 2);   // 停下时把这一下扇完
+    const v = b.v * (b.flap ? 1.15 : 1);
+    b.x += Math.cos(b.h) * v * dt; b.y += Math.sin(b.h) * v * dt;
+  });
+}
+
+
+/* ======================================================================
+   游泳的人
+   ====================================================================== */
+// 离岸方向（陆地场的梯度，指向海）
+function seaward(x, y) {
+  const gx = curS(x + 8, y) - curS(x - 8, y), gy = curS(x, y + 8) - curS(x, y - 8), l = Math.hypot(gx, gy) || 1;
+  return [gx / l, gy / l];
+}
+const inScreen = (x, y, m) => x > m && y > m && x < W - m && y < H - TASKBAR - m;
+
+/* ======================================================================
+   桌面图标（DOM）
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+let icons = [], layoutKind = 'mine', selected = null, drag = null, extraIdx = 0, layoutCapacity = 0;
+const grid = { cols: 1, rows: 1 };
+let DW = innerWidth, DH = innerHeight - TASKBAR;
+const ripples = [];
+function computeGrid() {
+  DW = innerWidth; DH = innerHeight - TASKBAR;
+  grid.cols = Math.max(1, Math.floor((DW - GRID_X0) / CELL_W));
+  grid.rows = Math.max(1, Math.floor((DH - GRID_Y0) / CELL_H));
+}
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+const occupied = (x, y, self) => icons.some(ic => ic !== self && Math.abs(ic.x - x) < CELL_W / 2 && Math.abs(ic.y - y) < CELL_H / 2);
+function nearestFreeCell(cx, cy, self) {
+  let best = null, bd = Infinity;
+  for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+    const pos = cellPos(c, r);
+    if (occupied(pos.x, pos.y, self)) continue;
+    const dd = Math.hypot(pos.x + CELL_W / 2 - cx, pos.y + CELL_H / 2 - cy);
+    if (dd < bd) { bd = dd; best = pos; }
+  }
+  return best;
+}
+const isWater = (x, y) => curS(x, y) > 4;
+function addRipple(x, y, str = 1) {
+  ripples.push({ x, y, t0: performance.now(), str });
+  if (ripples.length > 6) ripples.shift();
+}
+function addIcon([name, type], pos, born = false) {
+  const el = document.createElement('div');
+  el.className = 'icon' + (born ? ' born' : '');
+  el.innerHTML = `<div class="glyph"><svg viewBox="0 0 48 48">${glyphOf(name, type)}</svg></div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { name, type, x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic); bindDrag(ic);
+  return ic;
+}
+function setPos(ic, x, y) { ic.x = x; ic.y = y; ic.el.style.left = x + 'px'; ic.el.style.top = y + 'px'; }
+function select(ic) {
+  if (selected) selected.el.classList.remove('sel');
+  selected = ic;
+  if (ic) ic.el.classList.add('sel');
+}
+function bindDrag(ic) {
+  const el = ic.el;
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.stopPropagation(); select(ic);
+    el.setPointerCapture(e.pointerId); el.classList.remove('settle');
+    drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y, moved: false };
+  });
+  el.addEventListener('pointermove', e => {
+    if (!drag || drag.ic !== ic) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true; el.classList.add('drag');
+    el.style.left = drag.ox + dx + 'px'; el.style.top = drag.oy + dy + 'px';
+  });
+  const end = (e, cancel) => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null;
+    el.classList.remove('drag');
+    if (!d.moved) return;
+    let nx = cancel ? d.ox : d.ox + (e.clientX - d.sx), ny = cancel ? d.oy : d.oy + (e.clientY - d.sy);
+    nx = Math.min(Math.max(nx, 0), DW - ic.w); ny = Math.min(Math.max(ny, 0), DH - ic.h);
+    if (P.snap && !cancel) { const c = nearestFreeCell(nx + ic.w / 2, ny + ic.h / 2, ic); if (c) { nx = c.x; ny = c.y; } }
+    if (Math.hypot(nx - d.ox, ny - d.oy) < 0.5) { setPos(ic, nx, ny); return; }
+    const cx = nx + ic.w / 2, cy = ny + ic.h / 2;
+    if (isWater(cx, cy)) addRipple(cx, cy, 1.3);
+    el.classList.add('settle'); setPos(ic, nx, ny);
+    commit();
+  };
+  el.addEventListener('pointerup', e => end(e, false));
+  el.addEventListener('pointercancel', e => end(e, true));
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function applyLayout(kind) {
+  layoutKind = kind;
+  icons.forEach(ic => ic.el.remove()); icons = []; selected = null; extraIdx = 0;
+  computeGrid();
+  layoutCapacity = grid.cols * grid.rows;
+  if (kind === 'mine') {
+    for (const [c, r, name, type] of mineCells()) {
+      const pos = cellPos(Math.round(c * (grid.cols - 1) / 21), Math.round(r * (grid.rows - 1) / 9));
+      if (!occupied(pos.x, pos.y, null)) addIcon([name, type], pos);
+    }
+  } else if (kind === 'arranged') {
+    FILES.forEach((f, i) => { const c = Math.floor(i / grid.rows), r = i % grid.rows; if (c < grid.cols) addIcon(f, cellPos(c, r)); });
+  } else if (kind === 'messy') {
+    const rnd = mulberry32(20260928);
+    for (const f of FILES) for (let t = 0; t < 300; t++) {
+      const c = rnd() < 0.45 ? Math.floor(rnd() * Math.min(3, grid.cols)) : Math.floor(rnd() * grid.cols);
+      const pos = cellPos(c, Math.floor(rnd() * grid.rows));
+      if (!occupied(pos.x, pos.y, null)) { addIcon(f, pos); break; }
+    }
+  } else {
+    Array.from({ length: 10 }, (_, r) => [[0, r], [1, r]]).flat().concat([[2, 0], [2, 1], [2, 2], [3, 0], [3, 1], [3, 2], [Math.floor(grid.cols * 0.45), Math.floor(grid.rows * 0.5)]])
+      .forEach(([c, r], i) => addIcon(FILES[i], cellPos(Math.min(c, grid.cols - 1), Math.min(r, grid.rows - 1))));
+  }
+  commit(true);
+  kayaks.length = 0;
+  curMix = 1;                                   // 按最终海岸线挑皮划艇的出生点
+  syncKayaks();
+  curMix = 0;
+  if (!birds.length) syncBirds(false);
+}
+
+/* ======================================================================
+   尺寸 / 主循环
+   ====================================================================== */
+function resize() {
+  W = innerWidth; H = innerHeight;
+  // 预览模式：页面按整块桌面的尺寸排版、再整体缩小显示，所以画布只需要很低的分辨率
+  const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
+  // 按画布实际占的大小算（带小数：2560 宽的屏幕 150% 缩放是 1706.67，innerWidth 取整成 1707），
+  // 不然画布比屏幕多出一个像素，浏览器会把整幅画缩放一下贴上去，又发糊
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+  buildNoise();
+  allocField();
+}
+
+const T0 = performance.now();
+let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
+const ripBuf = new Float32Array(24), kayBuf = new Float32Array(16), birdBuf = new Float32Array(32);
+const px = new Uint8Array(4);
+let paused = false;                              // 宿主通知：前台窗口最大化 / 全屏 → 暂停
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (P.cap30 && now - lastT < 31) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + (1 / dt) * 0.1 : 1 / dt;
+  lastT = now;
+  const e = Math.min((now - morphT0) / morphDur, 1);
+  curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+  stepKayaks(dt, now);
+  stepBirds(dt);
+  draw(now);
+  if (++frameN % 10 === 0) updateStats();
+}
+function draw(now) {
+  ripBuf.fill(0);
+  ripples.forEach((r, i) => { const age = (now - r.t0) / 1000; if (age < 3) ripBuf.set([r.x, r.y, age, r.str], i * 4); });
+  kayBuf.fill(0);
+  kayaks.forEach((k, i) => kayBuf.set([k.x, k.y, k.h, k.ph], i * 4));
+  birdBuf.fill(0);
+  birds.forEach((b, i) => birdBuf.set([b.x, b.y, b.h, 0.68 + 0.32 * Math.cos(b.ph)], i * 4));
+
+  const measure = frameN % 20 === 0, t0 = performance.now();
+  configureBeachPass(now, PR);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  drawMaldivesPalms(now, palmPR, configureBeachPass);
+  if (measure) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); frameMs = performance.now() - t0; }
+}
+function configureBeachPass(now, pass) {
+  const { p, U } = pass;
+  gl.useProgram(p);
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ftex[fromI]);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, ftex[toI]);
+  gl.uniform1i(U.uNoise, 0); gl.uniform1i(U.uFA, 1); gl.uniform1i(U.uFB, 2);
+  gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);   // 和画布的实际像素对齐（innerWidth、innerHeight 是取整过的）
+  gl.uniform2f(U.uGrid, Gw, Gh);
+  gl.uniform1f(U.uScale, cv._scale);
+  gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
+  gl.uniform1f(U.uStep, STEP);
+  gl.uniform1f(U.uMix, curMix);
+  gl.uniform1f(U.uTime, (now - T0) / 1000);
+  gl.uniform1f(U.uSpeed, P.speed); gl.uniform1f(U.uRunup, P.runup);
+  gl.uniform1f(U.uShallow, P.shallow); gl.uniform1f(U.uShoal, P.shoal); gl.uniform1f(U.uGrain, P.grain);
+  gl.uniform1f(U.uWave, P.wave); gl.uniform1f(U.uSigma, P.sigma);
+  gl.uniform1f(U.uSpacing, P.spacing); gl.uniform1f(U.uWaves, P.waves);
+  gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
+  gl.uniform1f(U.uKayN, kayaks.length);
+  gl.uniform4fv(U.uKay, kayBuf);
+  gl.uniform4fv(U.uRip, ripBuf);
+  gl.uniform1f(U.uBirdN, birds.length); gl.uniform4fv(U.uBird, birdBuf);
+}
+
+/* ======================================================================
+   面板
+   ====================================================================== */
+const statsEl = document.getElementById('stats');
+const GPU = (() => {
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  return name.replace(/^ANGLE \([^,]+,\s*/, '').replace(/\s*\(0x[0-9a-f]+\).*$/i, '')
+    .replace(/\s*(Direct3D|vs_|OpenGL).*$/, '').replace(/\(R\)|\(TM\)/g, '').trim();
+})();
+function updateStats() {
+  statsEl.innerHTML =
+    `<span class="live">● 动画中 · ${fpsEMA.toFixed(0)} fps</span><br>GPU ${GPU}<br>` +
+    `单帧 ${frameMs.toFixed(1)} ms · 陆地场 ${fieldMs.toFixed(0)} ms<br>` +
+    `画布 ${cv.width}×${cv.height} · 图标 ${icons.length}`;
+}
+function syncPanel() {
+  document.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', b.dataset.v === layoutKind));
+  document.querySelectorAll('.toggles input').forEach(inp => { inp.checked = P[inp.dataset.key]; });
+}
+const slidersEl = document.getElementById('sliders');
+for (const s of SLIDERS) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slider';
+  wrap.innerHTML = `<div class="row"><span>${s.label}</span><span></span></div><input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${P[s.key]}">`;
+  const out = wrap.querySelector('.row span:last-child'), inp = wrap.querySelector('input');
+  out.textContent = s.fmt(P[s.key]);
+  inp.addEventListener('input', () => {
+    P[s.key] = +inp.value; out.textContent = s.fmt(P[s.key]);
+    if (s.act === 'field') refresh();
+    else if (s.act === 'size') { resize(); refresh(); }
+    else if (s.act === 'kayaks') syncKayaks();
+    else if (s.act === 'birds') syncBirds();
+  });
+  slidersEl.appendChild(wrap);
+}
+document.querySelector('.seg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  applyLayout(b.dataset.v); syncPanel();
+});
+document.querySelectorAll('.toggles input').forEach(inp => inp.addEventListener('change', () => {
+  P[inp.dataset.key] = inp.checked;
+}));
+document.getElementById('collapse').addEventListener('click', () => {
+  const p = document.getElementById('panel');
+  p.classList.toggle('collapsed');
+  document.getElementById('collapse').textContent = p.classList.contains('collapsed') ? '+' : '–';
+});
+// 换一张：新的种子（设置窗口的"刷新"、面板上的"换一张"）。已经知道图标在哪了就从头再来一遍开场；
+// 壁纸 / 预览刚打开、还不知道图标在哪的时候只记下种子（等图标来了再按它画）
+let iconsSeen = !(WALL || PREVIEW);
+function reseed(v) {
+  seed = v; buildNoise();
+  if (!iconsSeen) return;
+  commit(true);
+  curMix = 1; kayaks.length = 0; syncKayaks(); curMix = 0;   // 皮划艇按新的海重新放
+}
+document.getElementById('btnSeed').addEventListener('click', () => reseed((Math.random() * 1e6) | 0));
+document.getElementById('btnAdd').addEventListener('click', () => {
+  const f = EXTRA[extraIdx++ % EXTRA.length];
+  let pos = null;
+  for (let t = 0; t < 300 && !pos; t++) {
+    const c = cellPos(Math.floor(Math.random() * grid.cols), Math.floor(Math.random() * grid.rows));
+    if (!occupied(c.x, c.y, null)) pos = c;
+  }
+  if (!pos) return;
+  const ic = addIcon(f, pos, true);
+  select(ic);
+  if (isWater(pos.x + ic.w / 2, pos.y + ic.h / 2)) addRipple(pos.x + ic.w / 2, pos.y + ic.h / 2, 1.3);
+  commit();
+});
+desktop.addEventListener('pointerdown', e => {
+  select(null);
+  if (isWater(e.clientX, e.clientY)) addRipple(e.clientX, e.clientY);
+});
+addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+    const ic = selected; select(null); ic.el.remove(); icons = icons.filter(x => x !== ic); commit();
+  } else if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => {
+    if (WALL || PREVIEW) { resize(); refresh(); kayaks.length = 0; syncKayaks(); return; }
+    resize(); computeGrid();
+    if (grid.cols * grid.rows > layoutCapacity && layoutCapacity < 40) { applyLayout(layoutKind); syncPanel(); return; }
+    for (const ic of icons) setPos(ic, Math.min(ic.x, Math.max(0, DW - ic.w)), Math.min(ic.y, Math.max(0, DH - ic.h)));
+    refresh();
+    kayaks.length = 0; syncKayaks();
+  }, 100);
+});
+function tickClock() {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  document.getElementById('clock').innerHTML = `${z(d.getHours())}:${z(d.getMinutes())}<br>${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+setInterval(tickClock, 15000); tickClock();
+
+/* ---------- 启动 ---------- */
+window.__dbg = {
+  P, applyLayout, kayaks, birds,
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    return { frame: +ts[5].toFixed(1), canvas: cv.width + 'x' + cv.height, gpu: GPU };
+  },
+};
+resize();
+buildNoiseTex();
+if (WALL || PREVIEW) startHostedMode();
+else { applyLayout('mine'); syncPanel(); }
+requestAnimationFrame(frame);
+
+/* ======================================================================
+   托管模式：画面由外部驱动
+   - 壁纸模式（?wallpaper=1）：桌面宿主 host/Deskland.exe 通过 WebView2 发消息
+   - 预览模式（?preview=1）：设置窗口（settings.html）通过 iframe 的 postMessage 发消息
+   消息：icons（真实图标矩形，物理像素）/ settings（参数，部分更新）/ reset（恢复默认）/ pause
+   ====================================================================== */
+// 应用设置：只处理认识的参数；岸线相关的要重算陆地场，精度要重建画布，皮划艇要增减
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);   // 设置窗口的"刷新"：换一张（桌面和预览用同一个种子）
+  // 只接受面板上有的参数：已经去掉的选项（颗粒感、渲染精度）即使旧的设置文件里还存着也不生效
+  let field = false, kay = false, bird = false;
+  for (const k in v) {
+    if (!SLIDERS.some(s => s.key === k) || typeof v[k] !== typeof P[k] || P[k] === v[k]) continue;
+    P[k] = k === 'palms' ? Math.max(0, Math.min(10, Math.round(Number.isFinite(v[k]) ? v[k] : DEFAULTS.palms))) : v[k];
+    if (k === 'sigma' || k === 'warp') field = true;
+    else if (k === 'kayaks') kay = true;
+    else if (k === 'birds') bird = true;
+  }
+  if (field && FB) refresh();
+  if (kay) syncKayaks();
+  if (bird) syncBirds();
+}
+
+function drawGhosts() {
+  const box = document.getElementById('ghosts');
+  box.innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  commit(true);                                   // 先是一片海
+  syncBirds(false);
+  let first = true;
+  const settlePaused = () => {
+    if (!paused || !iconsSeen) return;
+    curMix = 1; morphT0 = -1e9;                  // 暂停只冻结动画，首次地形和图标布局仍要完成
+    draw(performance.now());
+  };
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; settlePaused(); return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);                                // 第一次：陆地从海里"长"出来；之后：岸线平滑移动
+    if (first) { curMix = 1; kayaks.length = 0; syncKayaks(); curMix = 0; first = false; }
+    settlePaused();
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+</script>
+<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
+</body>
+</html>

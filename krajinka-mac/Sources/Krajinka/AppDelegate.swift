@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var scenes: [CGDirectDisplayID: ScreenScene] = [:]
     private let iconProvider = DesktopIconProvider()
     private var statusItem: NSStatusItem?
-    private var theme = AppDelegate.makeTheme(ThemeID(rawValue: UserDefaults.standard.string(forKey: Keys.theme) ?? "") ?? .plaz)
+    private var theme = AppDelegate.makeTheme(ThemeID(rawValue: UserDefaults.standard.string(forKey: Keys.theme) ?? "") ?? .dlPlaz)
 
     private static func makeTheme(_ id: ThemeID) -> Theme {
         var t = Theme.named(id)
@@ -111,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for scene in scenes.values {
             let visible = scene.isVisible && !screensAsleep
             anyVisible = anyVisible || visible
-            scene.view.setAnimating(visible && !userPaused && !lowPower)
+            scene.setAnimating(visible && !userPaused && !lowPower)
         }
         iconProvider.isPolling = anyVisible
     }

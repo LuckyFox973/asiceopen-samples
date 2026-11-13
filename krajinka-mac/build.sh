@@ -14,6 +14,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Krajinka" "$APP/Contents/MacOS/Krajinka"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+# témy Desklandu (GPL-3.0, pozri Resources/Deskland/PRECITAJ.md)
+cp -R Resources/Deskland "$APP/Contents/Resources/Deskland"
 
 # Ad-hoc podpis ("-") stačí na lokálne spustenie. Pozor: po každom novom
 # ad-hoc builde si macOS pýta povolenie Accessibility nanovo (iný podpis).

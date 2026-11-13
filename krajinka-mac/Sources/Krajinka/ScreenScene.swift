@@ -35,7 +35,9 @@ final class ScreenScene: NSObject {
     let displayID: CGDirectDisplayID
     private(set) var screen: NSScreen
     let window: DesktopWindow
-    let view: SceneView
+    private var nativeView: SceneView?
+    private var webView: WebSceneView?
+    private var animating = true
     var onVisibilityChange: (() -> Void)?
 
     private var theme: Theme
@@ -51,10 +53,9 @@ final class ScreenScene: NSObject {
         self.theme = theme
         self.renderQueue = DispatchQueue(label: "krajinka.render.\(displayID)", qos: .utility)
         self.window = DesktopWindow(screen: screen)
-        self.view = SceneView(frame: NSRect(origin: .zero, size: screen.frame.size), theme: theme)
         super.init()
 
-        window.contentView = view
+        installContent(for: theme)
         window.orderFrontRegardless()
         NotificationCenter.default.addObserver(self, selector: #selector(occlusionChanged),
                                                name: NSWindow.didChangeOcclusionStateNotification,
@@ -73,16 +74,57 @@ final class ScreenScene: NSObject {
     func setIcons(_ newIcons: [CGRect]) {
         guard newIcons != icons else { return }
         icons = newIcons
-        requestRender()
+        if let web = webView {
+            web.setIcons(newIcons, screenHeight: screen.frame.height, scale: screen.backingScaleFactor)
+        } else {
+            requestRender()
+        }
     }
 
     func setTheme(_ t: Theme) {
         theme = t
-        view.setTheme(t)
-        requestRender()
+        installContent(for: t)
+        if let web = webView {
+            web.setIcons(icons ?? [], screenHeight: screen.frame.height, scale: screen.backingScaleFactor)
+        } else {
+            nativeView?.setTheme(t)
+            requestRender()
+        }
     }
 
-    func forceRedraw() { requestRender() }
+    func setAnimating(_ on: Bool) {
+        animating = on
+        nativeView?.setAnimating(on)
+        webView?.setAnimating(on)
+    }
+
+    func forceRedraw() {
+        if let web = webView { web.load(web.page) } else { requestRender() }
+    }
+
+    /// Téma Desklandu → WebKit; ostatné → vlastný Metal render. Pohľad sa vymení len pri zmene druhu.
+    private func installContent(for t: Theme) {
+        let frame = NSRect(origin: .zero, size: screen.frame.size)
+        if let page = t.webPage, WebSceneView.isAvailable {
+            if let web = webView {
+                if web.page != page { web.load(page) }
+            } else {
+                let web = WebSceneView(frame: frame, page: page)
+                webView = web
+                nativeView = nil
+                hasContent = false
+                window.contentView = web
+            }
+        } else if nativeView == nil {
+            let view = SceneView(frame: frame, theme: t)
+            nativeView = view
+            webView = nil
+            hasContent = false
+            window.contentView = view
+        }
+        nativeView?.setAnimating(animating)
+        webView?.setAnimating(animating)
+    }
 
     func close() {
         NotificationCenter.default.removeObserver(self)
@@ -107,6 +149,7 @@ final class ScreenScene: NSObject {
     }
 
     private func startRender() {
+        guard let view = nativeView else { return }
         rendering = true
         pending = false
         let size = screen.frame.size
@@ -125,7 +168,7 @@ final class ScreenScene: NSObject {
 
     private func finishRender(_ scene: RenderedScene?, animated: Bool) {
         rendering = false
-        if let scene {
+        if let scene, let view = nativeView {
             view.apply(scene, animated: animated)
             hasContent = true
         }

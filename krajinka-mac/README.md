@@ -5,6 +5,15 @@ a pod dokumentmi vytvorí iný povrch než v okolí: piesok uprostred mora,
 oblaky nad lesom, pastvinu medzi poliami alebo park v meste. Blízke dokumenty zdieľajú spoločnú oblasť. Mimo dokumentov
 takáto oblasť nikdy nevznikne.
 
+## Témy Desklandu (na Macu 1:1)
+
+Krajinka obsahuje aj pôvodné témy **Beach** a **Meadow** z open-source projektu
+Deskland Preview (GPL-3.0). V menu sú ako **Pláž – Deskland** a
+**Lúka – Deskland** a sú predvolené. Ich HTML/WebGL stránky sú nezmenené
+v `Resources/Deskland`. Krajinka ich zobrazuje cez WebKit a posiela im polohy
+ikon rovnako ako pôvodný Windows hostiteľ. Licencia a pôvod sú
+v `Resources/Deskland/PRECITAJ.md`.
+
 ![Témy](docs/temy.jpg)
 
 | Téma | Pod dokumentmi | Okolie | Pohyb (Metal shader) |

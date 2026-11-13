@@ -26,10 +26,13 @@ struct RGB {
 }
 
 enum ThemeID: String, CaseIterable {
+    case dlPlaz = "deskland-plaz", dlLuka = "deskland-luka"
     case plaz, ostrovy, les, polia, mesto
 
     var title: String {
         switch self {
+        case .dlPlaz: return "Pláž – Deskland"
+        case .dlLuka: return "Lúka – Deskland"
         case .plaz: return "Pláž"
         case .ostrovy: return "Ostrovy"
         case .les: return "Les a oblaky"
@@ -65,11 +68,20 @@ struct Theme {
 
     var hasSea: Bool { id == .plaz || id == .ostrovy }
 
+    /// Téma Desklandu (HTML/WebGL cez WebKit) – názov stránky; nil = vlastný Metal render.
+    var webPage: String? {
+        switch id {
+        case .dlPlaz: return "flat.html"
+        case .dlLuka: return "meadow.html"
+        default: return nil
+        }
+    }
+
     static func named(_ id: ThemeID) -> Theme {
         var t = Theme()
         t.id = id
         switch id {
-        case .plaz:
+        case .dlPlaz, .dlLuka, .plaz:
             break
         case .ostrovy:
             t.seed = 1; t.regionRadius = (34, 52); t.regionWobble = 30; t.regionBlend = 40
