@@ -36,6 +36,12 @@ V menu je navyše prepínač **Chodníky medzi dokumentmi**.
 > animácií do videa robí `tools/animation_preview.py`. Obe slúžia na ladenie
 > bez Macu a vzhľad aplikácie zachytávajú približne.
 
+### Lúka s corgim
+`Resources/Deskland/meadow-corgi.html` je Lúka Desklandu, v ktorej namiesto
+chlapca s drakom a mačky pobehuje corgi (`meadow-corgi.js`, vlastná kresba
+v Canvas 2D s rovnakým rozhraním ako pôvodná postavička). Ako odvodené dielo
+je pod GPL-3.0.
+
 ## Požiadavky
 
 - macOS 13 Ventura alebo novší
@@ -46,8 +52,11 @@ V menu je navyše prepínač **Chodníky medzi dokumentmi**.
 ```bash
 cd krajinka-mac
 ./build.sh
-open build/Krajinka.app
 ```
+
+Skript aplikáciu zostaví, nainštaluje do **Aplikácií** (`/Applications`, prípadne
+`~/Applications`) a spustí. Odvtedy ju otváraš z Launchpadu alebo Spotlightu;
+v menu ju môžeš nastaviť na spúšťanie pri prihlásení.
 
 Pri prvom spustení si macOS vypýta prístup **Accessibility**: Systémové
 nastavenia → Súkromie a bezpečnosť → Prístupnosť → zapnúť *Krajinka*.

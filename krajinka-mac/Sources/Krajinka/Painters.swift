@@ -59,7 +59,7 @@ struct Painters {
         let edge = sstep(-1, 1, sdf)
         var c: RGB
         switch theme.id {
-        case .plaz, .ostrovy, .dlPlaz, .dlLuka:
+        case .plaz, .ostrovy, .dlPlaz, .dlLuka, .corgi:
             let bg = edge < 1 ? sea(x, y, ch) : .black
             let fg = edge > 0 ? (theme.id == .plaz ? sand(x, y, ch) : island(x, y, ch)) : .black
             c = bg.mix(fg, edge)

@@ -51,7 +51,7 @@ final class SceneView: NSView {
 
     private static func index(_ id: ThemeID) -> Int32 {
         switch id {
-        case .plaz, .dlPlaz, .dlLuka: return 0
+        case .plaz, .dlPlaz, .dlLuka, .corgi: return 0
         case .ostrovy: return 1
         case .les: return 2
         case .polia: return 3

@@ -16,6 +16,8 @@ cp "$BIN_DIR/Krajinka" "$APP/Contents/MacOS/Krajinka"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 # témy Desklandu (GPL-3.0, pozri Resources/Deskland/PRECITAJ.md)
 cp -R Resources/Deskland "$APP/Contents/Resources/Deskland"
+# ikona aplikácie
+iconutil -c icns Resources/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns" 2>/dev/null || true
 
 # Ad-hoc podpis ("-") stačí na lokálne spustenie. Pozor: po každom novom
 # ad-hoc builde si macOS pýta povolenie Accessibility nanovo (iný podpis).
@@ -29,5 +31,11 @@ if [ -z "${SIGN_IDENTITY:-}" ]; then
   tccutil reset Accessibility app.krajinka.mac >/dev/null 2>&1 || true
 fi
 
-echo "Hotovo: $APP"
-echo "Spustenie: open \"$APP\""
+# Inštalácia medzi aplikácie: /Applications (ak sa dá), inak ~/Applications
+DEST="/Applications"
+if [ ! -w "$DEST" ]; then DEST="$HOME/Applications"; mkdir -p "$DEST"; fi
+rm -rf "$DEST/Krajinka.app"
+ditto "$APP" "$DEST/Krajinka.app"
+echo "Nainštalované: $DEST/Krajinka.app"
+echo "Odteraz ju spúšťaj z Launchpadu, Spotlightu alebo z priečinka Aplikácie."
+open "$DEST/Krajinka.app"

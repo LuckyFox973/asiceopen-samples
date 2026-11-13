@@ -6,6 +6,8 @@
     <string>sk</string>
     <key>CFBundleExecutable</key>
     <string>Krajinka</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>app.krajinka.mac</string>
     <key>CFBundleInfoDictionaryVersion</key>
