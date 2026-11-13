@@ -90,7 +90,7 @@ struct Theme {
             t.path = RGB(0xEDE8DE); t.pathEdge = RGB(0xB8B1A4)
         case .zima:
             t.seed = 3; t.regionRadius = (38, 58); t.regionWobble = 30; t.regionBlend = 44
-            t.base = RGB(0x2E5A55); t.snowfall = true; t.cloudShadowOpacity = 0.06
+            t.base = RGB(0xEEF3F8); t.snowfall = true; t.cloudShadowOpacity = 0.06
             t.path = RGB(0xF4F7FA); t.pathEdge = RGB(0xB9C8D8)
         }
         return t

@@ -15,7 +15,7 @@ takáto oblasť nikdy nevznikne.
 | Les a oblaky | kopovité oblaky | les a lúky zhora | vlny vetra v tráve, pohupovanie korún, tiene oblakov |
 | Polia | pastvina s kvetmi | parcely plodín, živé ploty | vietor, tiene oblakov |
 | Mesto | park | ulice, domy a mrakodrapy, stromy | tiene oblakov, vietor v parku |
-| Zima | snehová pláň | ojínený les | sneh v troch hĺbkach, trblietky snehu |
+| Zima | snehová pláň | les zasnežených smrekov, zamrznutý potok | sneh v troch hĺbkach, trblietky snehu |
 
 Animácie počíta Metal shader (`LiveShader.swift`) na GPU v 30 snímkach za
 sekundu. Keď je plocha zakrytá, pozastaví sa. Shader sa kompiluje pri

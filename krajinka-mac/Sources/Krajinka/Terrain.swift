@@ -22,11 +22,11 @@ enum CityGrid {
 /// oblasti). Pixely ich len bilineárne čítajú – jemné ťahy a bodky sa počítajú
 /// priamo v pixeli.
 struct TerrainField {
-    static let stride = 16
+    static let stride = 18
     static let sdf = 0, calm = 1, detail = 2, large = 3
     static let mot140 = 4, mot200 = 5, n40 = 6, n22 = 7, n55 = 8, n70 = 9, n30 = 10, n50 = 11
-    static let warpX = 12, warpY = 13, mot60 = 14
-    static let channels = 15
+    static let warpX = 12, warpY = 13, mot60 = 14, riverN = 15, riverGate = 16
+    static let channels = 17
 
     let cols: Int
     let rows: Int
@@ -74,7 +74,7 @@ enum TerrainRenderer {
         let S = TerrainField.stride
         var data = [Float](repeating: 0, count: cols * rows * S)
         let s = theme.seed
-        let n = (0..<16).map { ValueNoise(seed: s &+ UInt32(1000 + $0 * 37)) }
+        let n = (0..<18).map { ValueNoise(seed: s &+ UInt32(1000 + $0 * 37)) }
         let rects = icons.map { (Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
 
         // tvar oblasti každej ikony: zaoblený obdĺžnik, mierne posunutý a inak veľký
@@ -126,6 +126,8 @@ enum TerrainRenderer {
                 data[k + TerrainField.n50] = n[13].fbm(px / 50, py / 50, octaves: 2)
                 data[k + TerrainField.warpX] = (n[14].fbm(px / 160, py / 160, octaves: 2) - 0.5) * 46
                 data[k + TerrainField.warpY] = (n[15].fbm(px / 160, py / 160, octaves: 2) - 0.5) * 46
+                data[k + TerrainField.riverN] = n[16].fbm(px / 650, py / 650, octaves: 3)
+                data[k + TerrainField.riverGate] = n[17].fbm(px / 900, py / 900, octaves: 2)
             }
         }
         return TerrainField(cols: cols, rows: rows, cell: cell, data: data)

@@ -68,8 +68,8 @@ struct Painters {
         case .zima:
             var bg = RGB.black
             if edge < 1 {
-                bg = forest(x, y, ch, snowy: true)
-                bg = bg.scaled(1 - 0.12 * (1 - sstep(-12, 0, sdf)) * sstep(-24, -12, sdf))   // mäkký tieň okolo pláne
+                bg = snowGround(x, y, ch)                                      // smreky kreslí Decorator
+                bg = bg.scaled(1 - 0.10 * (1 - sstep(-12, 0, sdf)) * sstep(-24, -12, sdf))   // mäkký tieň okolo pláne
             }
             c = bg.mix(edge > 0 ? snowfield(x, y, ch) : .black, edge)
         case .polia:
@@ -173,6 +173,33 @@ struct Painters {
             fc = fc.mix(RGB(0xF4F8FB), dots(x, y, s &+ 94, cell: 7, p: 0.3, r: 1.4) * 0.5)
         }
         return bg.mix(fc, tree)
+    }
+
+    // MARK: - Zima
+
+    /// Vzdialenosť od osi zamrznutého potoka (menej ako ~0.02 = potok). Potok je len miestami.
+    static func riverDistance(_ field: TerrainField, _ x: Float, _ y: Float) -> Float {
+        guard sstep(0.42, 0.5, field.value(TerrainField.riverGate, x, y)) > 0.5 else { return 1 }
+        let wob = (field.value(TerrainField.n55, x, y) - 0.5) * 0.006
+        return abs(field.value(TerrainField.riverN, x, y) - 0.5 + wob) / 0.6
+    }
+
+    private static let iceStreaks = ValueNoise(seed: 702)
+
+    /// Zasnežená zem s mäkkými škvrnami a zamrznutým potokom.
+    private func snowGround(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        var c = RGB(0xEEF3F8).mix(RGB(0xDCE6F0), sstep(0.35, 0.7, ch[TerrainField.mot140]))
+        c = c.mix(.white, dots(x, y, s &+ 601, cell: 5, p: 0.25, r: 0.5) * 0.6)
+        let dist = Self.riverDistance(field, x, y)
+        guard dist < 0.026 else { return c }
+        let ice = 1 - sstep(0.012, 0.016, dist)
+        let bank = (1 - sstep(0.016, 0.026, dist)) * (1 - ice)
+        c = c.mix(RGB(0xC9D7E5), bank * 0.6)                                    // modrastý tieň brehu
+        guard ice > 0 else { return c }
+        let streak = Self.iceStreaks.fbm(x / 90, y / 9, octaves: 3)
+        var ic = RGB(0xA9C7DC).mix(RGB(0xCFE2EE), sstep(0.3, 0.7, streak))
+        ic = ic.mix(RGB(0x8DB0C9), (1 - sstep(0, 0.006, 0.016 - dist)) * 0.6)   // tmavší okraj ľadu
+        return c.mix(ic, ice)
     }
 
     // MARK: - Polia
