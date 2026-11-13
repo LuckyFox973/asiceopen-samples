@@ -43,6 +43,7 @@ def grain(X, Y):
     return g + fib
 
 # ---------------------------------------------------------------- okolia
+LIVE = False
 SEA = dict(plaz=[(0, 0xCFF1E8), (8, 0x9BE5DC), (24, 0x55CFD2), (70, 0x23B4C8), (150, 0x1499BD), (320, 0x0E82AC)],
            ostrovy=[(0, 0xC2ECE2), (8, 0x86DDD5), (24, 0x3FBFCB), (70, 0x1E9CC0), (150, 0x1579AE), (320, 0x10609A)])
 
@@ -68,6 +69,7 @@ def sea(P, name):
     # druhá a tretia línia peny v diaľke
     l1 = np.exp(-((depth-(13+(nz-.5)*10))/.9)**2)*sstep(.42, .6, fbm(X/55, Y/55, s+9, 2))*.55
     l2 = np.exp(-((depth-(28+(nz-.5)*16))/.8)**2)*sstep(.5, .66, fbm(X/70, Y/70, s+10, 2))*.32
+    if LIVE: return c
     foam = np.clip(np.maximum.reduce([lip, spray, l1, l2]), 0, 1)
     c = mix(c, C(0xFFFFFF, sh), foam)
     spark = dots(X, Y, s+50, 22, .35, .75)*sstep(20, 60, depth)
@@ -162,6 +164,7 @@ def sand(P, s):
     c = mix(c, C(0xD8C7A6, sh), dots(X, Y, s+21, 3.2, .35, .45)*.55)
     c = mix(c, C(0xFFFFFF, sh), dots(X, Y, s+22, 3.6, .2, .4)*.6)
     nz = fbm(X/40, Y/40, s+5, 2)
+    if LIVE: return c
     wet = 1-sstep(3, 14+(nz-.5)*8, inl)
     c = mix(c, C(0xE2D3B6, sh), wet*.7)
     wash = np.exp(-((inl-(9+(nz-.5)*8))/.8)**2)*sstep(.4, .6, fbm(X/30, Y/30, s+23, 2))

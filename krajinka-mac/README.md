@@ -8,19 +8,26 @@ takáto oblasť nikdy nevznikne.
 
 ![Šesť tém](docs/temy.jpg)
 
-| Téma | Pod dokumentmi | Okolie | Pohyb |
+| Téma | Pod dokumentmi | Okolie | Pohyb (Metal shader) |
 |---|---|---|---|
-| Pláž | krémový piesok, mokrý pás, stopa vlny | tyrkysové more, pena, spŕška | pena dýcha, svetlo pláva po hladine, trblietky |
-| Ostrovy | tráva s plážou, stromy | hlbšie more | ako Pláž |
-| Les a oblaky | kopovité oblaky | les a lúky zhora | tiene oblakov, vietor v tráve |
-| Polia | pastvina s kvetmi | parcely plodín, živé ploty | tiene oblakov, vietor |
-| Mesto | park | ulice, domy a mrakodrapy, stromy | tiene oblakov |
-| Zima | snehová pláň | ojínený les | sneženie |
+| Pláž | krémový piesok | tyrkysové more | príboj vybieha na piesok a ustupuje, piesok za ním vysychá; vlny sa lámu na penu; kaustiky; odlesky slnka; tiene oblakov |
+| Ostrovy | tráva s plážou, stromy | hlbšie more | ako Pláž + vietor v tráve |
+| Les a oblaky | kopovité oblaky | les a lúky zhora | vlny vetra v tráve, pohupovanie korún, tiene oblakov |
+| Polia | pastvina s kvetmi | parcely plodín, živé ploty | vietor, tiene oblakov |
+| Mesto | park | ulice, domy a mrakodrapy, stromy | tiene oblakov, vietor v parku |
+| Zima | snehová pláň | ojínený les | sneh v troch hĺbkach, trblietky snehu |
+
+Animácie počíta Metal shader (`LiveShader.swift`) na GPU v 30 snímkach za
+sekundu. Keď je plocha zakrytá, pozastaví sa. Shader sa kompiluje pri
+spustení, takže stačia Command Line Tools. Ak by kompilácia zlyhala,
+Krajinka ukáže statický obraz a chybu zapíše do
+`~/Library/Logs/Krajinka/shader-chyba.txt`.
 
 V menu je navyše prepínač **Chodníky medzi dokumentmi**.
 
-> Náhľady vyrenderoval `tools/terrain_preview.py` (numpy + cairo). Slúži na
-> ladenie vzhľadu bez Macu a vzhľad aplikácie zachytáva približne.
+> Náhľady vyrenderoval `tools/terrain_preview.py` (numpy + cairo). Simuláciu
+> animácií do videa robí `tools/animation_preview.py`. Obe slúžia na ladenie
+> bez Macu a vzhľad aplikácie zachytávajú približne.
 
 ## Požiadavky
 

@@ -114,8 +114,9 @@ final class ScreenScene: NSObject {
         let icons = self.icons ?? []
         let theme = self.theme
         let animated = hasContent
+        let live = view.isLive
         renderQueue.async { [self] in
-            let scene = TerrainRenderer.render(size: size, scale: scale, icons: icons, theme: theme)
+            let scene = TerrainRenderer.render(size: size, scale: scale, icons: icons, theme: theme, live: live)
             Task { @MainActor in
                 self.finishRender(scene, animated: animated)
             }

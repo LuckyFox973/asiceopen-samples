@@ -8,11 +8,14 @@ struct Painters {
     let field: TerrainField
     private let s: UInt32
     private let fiber = ValueNoise(seed: 77)
+    /// true = penu, trblietky a mokrý piesok kreslí shader, podklad je bez nich.
+    private let live: Bool
 
-    init(theme: Theme, field: TerrainField) {
+    init(theme: Theme, field: TerrainField, live: Bool) {
         self.theme = theme
         self.field = field
         self.s = theme.seed
+        self.live = live
     }
 
     // MARK: - Pomôcky
@@ -120,9 +123,9 @@ struct Painters {
         let m = ch[TerrainField.mot200]
         c = c.mix(c.scaled(1.08).offset(0.04), sstep(0.52, 0.72, m) * sstep(10, 40, depth) * 0.8)   // svetlé škvrny
         c = c.mix(c.scaled(0.93), sstep(0.6, 0.8, 1 - m) * sstep(40, 120, depth) * 0.5)
-        // pena je v podklade z polovice – zvyšok „dýcha“ v animácii
+        if live { return c }                                                   // penu a trblietky kreslí shader
         let f = foam(x: x, y: y)
-        c = c.mix(.white, max(f.shore, f.lines) * 0.55)
+        c = c.mix(.white, max(f.shore, f.lines))
         let spark = depth > 20 ? dots(x, y, s &+ 50, cell: 22, p: 0.35, r: 0.75) * sstep(20, 60, depth) : 0
         return c.mix(.white, spark * 0.6)
     }
@@ -226,6 +229,7 @@ struct Painters {
         var c = RGB(0xF5EEDF).mix(RGB(0xEDE2CC), sstep(0.4, 0.7, ch[TerrainField.mot140]) * (1 - 0.5 * ch[TerrainField.calm]))
         c = c.mix(RGB(0xD8C7A6), dots(x, y, s &+ 21, cell: 3.2, p: 0.35, r: 0.45) * 0.55)
         c = c.mix(.white, dots(x, y, s &+ 22, cell: 3.6, p: 0.2, r: 0.4) * 0.6)
+        if live { return c }                                                   // mokrý piesok kreslí shader
         let nz = ch[TerrainField.n40]
         c = c.mix(RGB(0xE2D3B6), (1 - sstep(3, 14 + (nz - 0.5) * 8, inl)) * 0.7)          // mokrý piesok
         let z = (inl - (9 + (nz - 0.5) * 8)) / 0.8

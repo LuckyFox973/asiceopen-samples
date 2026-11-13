@@ -3,10 +3,12 @@ import Foundation
 
 /// Výsledok jedného prekreslenia jednej obrazovky.
 struct RenderedScene {
-    let terrain: CGImage        // nepriehľadný maľovaný podklad
-    let waterMask: CGImage      // alfa = voda (svetlo na hladine, trblietky) – len pri mori
-    let shoreFoamMask: CGImage  // alfa = pena a spŕška pri brehu
-    let foamLinesMask: CGImage  // alfa = línie peny ďalej od brehu
+    let terrain: CGImage        // maľovaný podklad
+    /// Pole pre shader: na uzol (sdf, šum 40, šum 22, maska trávy) – Float32 RGBA.
+    let fieldData: [Float]
+    let fieldCols: Int
+    let fieldRows: Int
+    let fieldCell: Float
 }
 
 /// Mriežka ulíc v téme Mesto (body).
@@ -131,10 +133,11 @@ enum TerrainRenderer {
 
     // MARK: - Render
 
-    static func render(size: CGSize, scale: CGFloat, icons: [CGRect], theme: Theme) -> RenderedScene? {
+    /// - Parameter live: true = penu, trblietky a mokrý piesok kreslí shader (podklad je bez nich).
+    static func render(size: CGSize, scale: CGFloat, icons: [CGRect], theme: Theme, live: Bool) -> RenderedScene? {
         guard size.width > 0, size.height > 0 else { return nil }
         let field = buildField(size: size, icons: icons, theme: theme)
-        guard let ctx = renderPixels(field: field, size: size, scale: scale, theme: theme) else { return nil }
+        guard let ctx = renderPixels(field: field, size: size, scale: scale, theme: theme, live: live) else { return nil }
 
         ctx.saveGState()
         ctx.scaleBy(x: scale, y: scale)
@@ -144,15 +147,30 @@ enum TerrainRenderer {
         Decorator.draw(in: ctx, size: size, field: field, icons: icons, paths: paths, theme: theme)
         ctx.restoreGState()
         guard let terrain = ctx.makeImage() else { return nil }
-
-        if theme.hasSea, let m = renderSeaMasks(field: field, size: size, scale: scale, theme: theme) {
-            return RenderedScene(terrain: terrain, waterMask: m.water, shoreFoamMask: m.shore, foamLinesMask: m.lines)
-        }
-        guard let empty = makeContext(1, 1)?.makeImage() else { return nil }
-        return RenderedScene(terrain: terrain, waterMask: empty, shoreFoamMask: empty, foamLinesMask: empty)
+        return RenderedScene(terrain: terrain, fieldData: shaderField(field, theme: theme),
+                             fieldCols: field.cols, fieldRows: field.rows, fieldCell: field.cell)
     }
 
-    private static func renderPixels(field: TerrainField, size: CGSize, scale: CGFloat, theme t: Theme) -> CGContext? {
+    /// Kanály pre shader. Maska trávy: pri Lese 1 = lúka, 0 = les; inde 1.
+    private static func shaderField(_ f: TerrainField, theme: Theme) -> [Float] {
+        let n = f.cols * f.rows, S = TerrainField.stride
+        var out = [Float](repeating: 0, count: n * 4)
+        for k in 0..<n {
+            let b = k * S
+            out[k * 4] = f.data[b + TerrainField.sdf]
+            out[k * 4 + 1] = f.data[b + TerrainField.n40]
+            out[k * 4 + 2] = f.data[b + TerrainField.n22]
+            var grass: Float = 1
+            if theme.id == .les {
+                let g = f.data[b + TerrainField.large] + (f.data[b + TerrainField.detail] - 0.5) * 0.25
+                grass = 1 - sstep(0.488, 0.512, g)
+            }
+            out[k * 4 + 3] = grass
+        }
+        return out
+    }
+
+    private static func renderPixels(field: TerrainField, size: CGSize, scale: CGFloat, theme t: Theme, live: Bool) -> CGContext? {
         let width = max(1, Int((size.width * scale).rounded()))
         let height = max(1, Int((size.height * scale).rounded()))
         guard let ctx = makeContext(width, height),
@@ -172,7 +190,7 @@ enum TerrainRenderer {
             colIndex[c] = Int(gx)
             colFrac[c] = gx - Float(Int(gx))
         }
-        let painter = Painters(theme: t, field: field)
+        let painter = Painters(theme: t, field: field, live: live)
 
         field.data.withUnsafeBufferPointer { d in
             var ch = [Float](repeating: 0, count: TerrainField.channels)
@@ -209,35 +227,6 @@ enum TerrainRenderer {
             }
         }
         return ctx
-    }
-
-    /// Masky pre animácie mora: voda (polovičné rozlíšenie stačí), pena pri brehu
-    /// a línie peny (plné rozlíšenie – sú jemné).
-    private static func renderSeaMasks(field: TerrainField, size: CGSize, scale: CGFloat, theme t: Theme)
-        -> (water: CGImage, shore: CGImage, lines: CGImage)? {
-        func mask(_ scale: CGFloat, _ value: (Float, Float) -> Float) -> CGImage? {
-            let width = max(1, Int((size.width * scale).rounded()))
-            let height = max(1, Int((size.height * scale).rounded()))
-            guard let ctx = makeContext(width, height), let b = ctx.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
-            let rowBytes = ctx.bytesPerRow
-            let inv = 1 / Float(scale)
-            for row in 0..<height {
-                let y = (Float(height - 1 - row) + 0.5) * inv
-                for col in 0..<width {
-                    let x = (Float(col) + 0.5) * inv
-                    let a = byte(value(x, y))
-                    let o = row * rowBytes + col * 4
-                    b[o] = a; b[o + 1] = a; b[o + 2] = a; b[o + 3] = a     // biela, premultiplikovaná
-                }
-            }
-            return ctx.makeImage()
-        }
-        let painter = Painters(theme: t, field: field)
-        guard let water = mask(max(0.5, scale * 0.5), { x, y in clamp01(-field.value(TerrainField.sdf, x, y) + 0.5) }),
-              let shore = mask(scale, { x, y in painter.foam(x: x, y: y).shore }),
-              let lines = mask(scale, { x, y in painter.foam(x: x, y: y).lines })
-        else { return nil }
-        return (water, shore, lines)
     }
 
     @inline(__always)
