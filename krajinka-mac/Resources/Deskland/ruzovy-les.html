@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<title>Krajinka – Ružový les</title>
+<style>html, body { margin: 0; height: 100%; overflow: hidden; background: #f8f0e7; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<script src="krajinka-actors.js"></script>
+<script>
+// Ružový les: ilustrácia perom na krémovom papieri – pastelové „lízankové“ stromy
+// so vzormi, obrysové smreky, štíhle stromy ako listy, domčeky a vtáčiky.
+(function () {
+  const INK = '#4a3532';
+  const PASTELS = ['#f4a6b8', '#f08a7a', '#f6c39a', '#e8708e', '#9cc3e6', '#f3d46b', '#c9aee3', '#f7b7c8', '#ee9e8a', '#a8d5c2'];
+  const shade = (hex, k) => { const n = parseInt(hex.slice(1), 16); const f = c => Math.max(0, Math.min(255, Math.round(c * k))); return `rgb(${f(n >> 16)},${f(n >> 8 & 255)},${f(n & 255)})`; };
+
+  function ink(g, w = 1.1) { g.strokeStyle = INK; g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke(); }
+
+  window.KRAJINKA_THEME = {
+    seed: 13,
+    region: { radius: [34, 52], wobble: 22, blend: 40 },
+
+    paintGround(g, W, H, K) {
+      g.fillStyle = '#f6ede3'; g.fillRect(0, 0, W, H);
+      const r = K.rng(5);
+      for (let i = 0; i < W * H / 7000; i++) {                        // jemné akvarelové škvrny
+        const x = r() * W, y = r() * H, rad = 30 + r() * 90, col = r() < .5 ? '240,190,200' : '235,215,190';
+        const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+        gr.addColorStop(0, `rgba(${col},.18)`); gr.addColorStop(1, `rgba(${col},0)`);
+        g.fillStyle = gr; g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+      }
+      g.strokeStyle = 'rgba(74,53,50,.45)'; g.lineWidth = .9; g.lineCap = 'round';
+      for (let i = 0; i < W * H / 1400; i++) {                        // trsy trávy perom
+        const x = r() * W, y = r() * H;
+        g.beginPath(); g.moveTo(x - 1.6, y); g.lineTo(x - 2.4, y - 3); g.moveTo(x, y); g.lineTo(x, y - 4); g.moveTo(x + 1.6, y); g.lineTo(x + 2.6, y - 3); g.stroke();
+      }
+    },
+
+    paintRegion(g, W, H, K) {
+      g.fillStyle = '#fcf6ef'; g.fillRect(0, 0, W, H);
+      const r = K.rng(6);
+      for (let i = 0; i < W * H / 5000; i++) {                        // drobné kvietky
+        const x = r() * W, y = r() * H; g.fillStyle = ['#f4a6b8', '#f3d46b', '#9cc3e6'][(r() * 3) | 0];
+        g.beginPath(); g.arc(x, y, 1.4, 0, 6.2832); g.fill();
+      }
+    },
+
+    paintRegionEdge(g, W, H, K, field) {
+      // ružovkastý okraj čistín
+      const r = K.rng(8);
+      g.fillStyle = 'rgba(232,140,160,.10)';
+      for (let i = 0; i < W * H / 260; i++) {
+        const x = r() * W, y = r() * H, sd = field.at(x, y);
+        if (sd > -2 && sd < 6) { g.beginPath(); g.arc(x, y, 2.5, 0, 6.2832); g.fill(); }
+      }
+    },
+
+    place(W, H, K, field) {
+      const out = [], cell = 30, s = 13;
+      for (let j = -2; j < H / cell + 4; j++) for (let i = -1; i < W / cell + 1; i++) {
+        const x = (i + .1 + .8 * K.hash(i, j, s + 11)) * cell, y = (j + .1 + .8 * K.hash(i, j, s + 23)) * cell;
+        if (field.at(x, y) > -6) continue;
+        const roll = K.hash(i, j, s + 37), grove = K.fbm(x / 240, y / 240, s + 71);
+        if (roll > .32 + .55 * grove) continue;
+        const t = K.hash(i, j, s + 53), sz = K.hash(i, j, s + 61), v = K.hash(i, j, s + 67);
+        let kind = t < .55 ? 'lolly' : t < .75 ? 'pine' : t < .97 ? 'leaf' : 'house';
+        const h = kind === 'house' ? 26 : 40 + sz * 34;
+        const w = kind === 'lolly' ? h * .62 : kind === 'pine' ? h * .55 : kind === 'leaf' ? h * .38 : 26;
+        out.push({ kind, x, y, h, w, v, pattern: (K.hash(i, j, s + 71) * 5) | 0, color: PASTELS[(v * PASTELS.length) | 0],
+                   bird: K.hash(i, j, s + 79) < .06, box: [x - w / 2 - 2, y - h - 2, x + w / 2 + 2, y + 3] });
+      }
+      return out;
+    },
+
+    shadow(g, o) {
+      const rx = o.w * .58, ry = Math.max(3, o.w * .18), cx = o.x + o.h * .2, cy = o.y + 1;
+      g.fillStyle = 'rgba(140,90,90,.16)'; g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, 6.2832); g.fill();
+    },
+
+    draw(g, o) {
+      const { x, y, h, w } = o;
+      if (o.kind === 'house') {
+        g.fillStyle = '#fbf3ea'; g.beginPath(); g.rect(x - 11, y - 14, 22, 14); g.fill(); ink(g);
+        g.fillStyle = o.color; g.beginPath(); g.moveTo(x - 14, y - 13); g.lineTo(x, y - 26); g.lineTo(x + 14, y - 13); g.closePath(); g.fill(); ink(g);
+        g.beginPath(); g.rect(x - 3, y - 8, 6, 8); ink(g, .9);
+        g.beginPath(); g.rect(x + 4.5, y - 11, 4, 4); ink(g, .8);
+        return;
+      }
+      // kmeň
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x, y - h * (o.kind === 'pine' ? .2 : .45)); ink(g, 1.4);
+      if (o.kind === 'lolly') {
+        const cy = y - h * .66, r = w * .5;
+        g.fillStyle = o.color; g.beginPath(); g.arc(x, cy, r, 0, 6.2832); g.fill(); ink(g);
+        g.strokeStyle = shade(o.color, .72); g.lineWidth = 1;
+        g.save(); g.beginPath(); g.arc(x, cy, r - 1, 0, 6.2832); g.clip();
+        if (o.pattern === 0) {                                          // špirála
+          g.beginPath(); for (let a = 0; a < 18; a += .2) { const rr = a / 18 * r * .9; g.lineTo(x + Math.cos(a) * rr, cy + Math.sin(a) * rr); } g.stroke();
+        } else if (o.pattern === 1) {                                   // sústredné kruhy
+          for (let rr = r * .25; rr < r; rr += r * .22) { g.beginPath(); g.arc(x, cy, rr, 0, 6.2832); g.stroke(); }
+        } else if (o.pattern === 2) {                                   // bodky
+          g.fillStyle = shade(o.color, .75);
+          for (let k = 0; k < 9; k++) { const a = k * 2.4, rr = r * .65 * Math.sqrt((k + .5) / 9); g.beginPath(); g.arc(x + Math.cos(a) * rr, cy + Math.sin(a) * rr, 1.3, 0, 6.2832); g.fill(); }
+        } else if (o.pattern === 3) {                                   // zvislé ťahy
+          for (let k = -2; k <= 2; k++) { g.beginPath(); g.moveTo(x + k * r * .3, cy - r * .7); g.lineTo(x + k * r * .3, cy + r * .7); g.stroke(); }
+        } else {                                                        // svetlá škvrna
+          g.fillStyle = 'rgba(255,255,255,.35)'; g.beginPath(); g.arc(x - r * .3, cy - r * .3, r * .38, 0, 6.2832); g.fill();
+        }
+        g.restore();
+      } else if (o.kind === 'pine') {
+        const top = y - h, base = y - h * .14;
+        g.fillStyle = o.v < .5 ? '#fdf8f2' : shade(o.color, 1.05);
+        g.beginPath(); g.moveTo(x, top); g.lineTo(x + w / 2, base); g.lineTo(x - w / 2, base); g.closePath(); g.fill(); ink(g);
+        g.strokeStyle = INK; g.lineWidth = .8;
+        for (let k = 1; k < 5; k++) { const yy = top + (base - top) * k / 5, hw = w / 2 * k / 5 * .8; g.beginPath(); g.moveTo(x - hw, yy); g.lineTo(x + hw, yy); g.stroke(); }
+      } else {
+        const cy = y - h * .62;
+        g.fillStyle = o.color; g.beginPath(); g.ellipse(x, cy, w / 2, h * .38, 0, 0, 6.2832); g.fill(); ink(g);
+        g.beginPath(); g.moveTo(x, cy + h * .34); g.lineTo(x, cy - h * .3); ink(g, .9);
+        for (let k = -2; k <= 2; k++) { const yy = cy + k * h * .1; g.beginPath(); g.moveTo(x, yy + 3); g.lineTo(x - w * .3, yy - 2); g.moveTo(x, yy + 3); g.lineTo(x + w * .3, yy - 2); ink(g, .7); }
+      }
+      if (o.bird) {                                                    // vtáčik na korune
+        const bx = x + w * .2, by = y - h * .98;
+        g.fillStyle = '#3d2b2a'; g.beginPath(); g.ellipse(bx, by, 3.2, 2.2, -.3, 0, 6.2832); g.fill();
+        g.beginPath(); g.arc(bx + 2.6, by - 1.8, 1.6, 0, 6.2832); g.fill();
+        g.fillStyle = '#f3a24a'; g.beginPath(); g.moveTo(bx + 4, by - 1.8); g.lineTo(bx + 5.6, by - 1.4); g.lineTo(bx + 4, by - 1); g.fill();
+      }
+    },
+
+    actors: (() => {
+      const a = KrajinkaActors({ clouds: .05, cloudColor: '150,100,110', birds: true, birdColor: '#4a3532',
+                                 leaves: .6, leafColors: ['#f4a6b8', '#f7c4d0', '#e8708e', '#fbd9e1'], leafSize: 3.4 });
+      return { layout: (W, H) => a.layout(W, H), frame: (c, dt, t) => a.frame(c, dt, t) };
+    })(),
+  };
+})();
+</script>
+<script src="krajinka-scene.js"></script>
+</body>
+</html>

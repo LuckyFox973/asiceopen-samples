@@ -42,6 +42,14 @@ chlapca s drakom a mačky pobehuje corgi (`meadow-corgi.js`, vlastná kresba
 v Canvas 2D s rovnakým rozhraním ako pôvodná postavička). Ako odvodené dielo
 je pod GPL-3.0.
 
+### Ilustrované témy v šikmom pohľade (vlastné)
+`les.html`, `mesto-farebne.html` a `ruzovy-les.html` sú vlastné témy Krajinky
+(motor `krajinka-scene.js`, pohyblivé prvky `krajinka-actors.js`). Objekty
+stoja na zemi a kreslia sa odzadu dopredu v pohľade približne 65°, tiene
+padajú doprava dole. Statická vrstva sa prekreslí len pri zmene ikon. Pri
+každom snímku sa nad ňou kreslia tiene oblakov, kŕdle vtákov a padajúce
+lístky. Komunikujú s hostiteľom rovnako ako témy Desklandu.
+
 ## Požiadavky
 
 - macOS 13 Ventura alebo novší

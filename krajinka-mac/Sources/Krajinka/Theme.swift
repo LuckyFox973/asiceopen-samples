@@ -27,6 +27,7 @@ struct RGB {
 
 enum ThemeID: String, CaseIterable {
     case dlPlaz = "deskland-plaz", dlLuka = "deskland-luka", corgi = "luka-corgi"
+    case les3 = "les-ilustrovany", farebneMesto = "farebne-mesto", ruzovyLes = "ruzovy-les"
     case plaz, ostrovy, les, polia, mesto
 
     var title: String {
@@ -34,11 +35,14 @@ enum ThemeID: String, CaseIterable {
         case .dlPlaz: return "Pláž – Deskland"
         case .dlLuka: return "Lúka – Deskland"
         case .corgi: return "Lúka s corgim"
-        case .plaz: return "Pláž"
-        case .ostrovy: return "Ostrovy"
-        case .les: return "Les a oblaky"
-        case .polia: return "Polia"
-        case .mesto: return "Mesto"
+        case .les3: return "Les"
+        case .farebneMesto: return "Farebné mesto"
+        case .ruzovyLes: return "Ružový les"
+        case .plaz: return "Pláž (Metal)"
+        case .ostrovy: return "Ostrovy (Metal)"
+        case .les: return "Les a oblaky (Metal)"
+        case .polia: return "Polia (Metal)"
+        case .mesto: return "Mesto (Metal)"
         }
     }
 }
@@ -75,6 +79,9 @@ struct Theme {
         case .dlPlaz: return "flat.html"
         case .dlLuka: return "meadow.html"
         case .corgi: return "meadow-corgi.html"
+        case .les3: return "les.html"
+        case .farebneMesto: return "mesto-farebne.html"
+        case .ruzovyLes: return "ruzovy-les.html"
         default: return nil
         }
     }
@@ -83,7 +90,7 @@ struct Theme {
         var t = Theme()
         t.id = id
         switch id {
-        case .dlPlaz, .dlLuka, .corgi, .plaz:
+        case .dlPlaz, .dlLuka, .corgi, .les3, .farebneMesto, .ruzovyLes, .plaz:
             break
         case .ostrovy:
             t.seed = 1; t.regionRadius = (34, 52); t.regionWobble = 30; t.regionBlend = 40

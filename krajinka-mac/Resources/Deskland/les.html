@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<title>Krajinka – Les</title>
+<style>html, body { margin: 0; height: 100%; overflow: hidden; background: #c8de9c; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<script src="krajinka-actors.js"></script>
+<script>
+// Les v šikmom pohľade: ihličnany, listnáče a cyprusy s kmeňmi a tieňmi,
+// dokumenty na svetlých lúčnych čistinách.
+(function () {
+  const conifers = [['#4f9a6a', '#2f6e4a'], ['#5aa073', '#397a55'], ['#468a85', '#2c6662'], ['#73ad62', '#4f8a45']];
+  const rounds = [['#76b35d', '#4d8b43', '#a3d07a'], ['#62a167', '#43804b', '#8fc58a'], ['#93bf55', '#6c9a3b', '#bcd877'], ['#4a8a90', '#336a70', '#74aeb2']];
+  const cypress = [['#2f6280', '#4a84a2'], ['#2f6e52', '#4a8f6e']];
+
+  function blob(g, x, y, r, col) { g.fillStyle = col; g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill(); }
+
+  window.KRAJINKA_THEME = {
+    seed: 5,
+    region: { radius: [34, 54], wobble: 26, blend: 44 },
+
+    paintGround(g, W, H, K) {
+      g.fillStyle = '#c3da95'; g.fillRect(0, 0, W, H);
+      const r = K.rng(41);
+      for (let i = 0; i < W * H / 9000; i++) {                       // akvarelové škvrny
+        const x = r() * W, y = r() * H, rad = 40 + r() * 120;
+        const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+        const col = r() < .5 ? '170,204,120' : '214,232,170';
+        gr.addColorStop(0, `rgba(${col},.35)`); gr.addColorStop(1, `rgba(${col},0)`);
+        g.fillStyle = gr; g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+      }
+      g.strokeStyle = 'rgba(92,135,64,.45)'; g.lineWidth = 1; g.lineCap = 'round';
+      for (let i = 0; i < W * H / 260; i++) {                         // ťahy trávy
+        const x = r() * W, y = r() * H, l = 2 + r() * 3;
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + l, y - .4); g.stroke();
+      }
+    },
+
+    paintRegion(g, W, H, K) {
+      g.fillStyle = '#dcebb6'; g.fillRect(0, 0, W, H);
+      const r = K.rng(42);
+      g.strokeStyle = 'rgba(120,160,80,.35)'; g.lineWidth = 1; g.lineCap = 'round';
+      for (let i = 0; i < W * H / 700; i++) { const x = r() * W, y = r() * H; g.beginPath(); g.moveTo(x, y); g.lineTo(x + 2.5, y - .3); g.stroke(); }
+      for (let i = 0; i < W * H / 9000; i++) {                       // kvietky
+        const x = r() * W, y = r() * H; g.fillStyle = ['#fff', '#f6d55c', '#f2a7c0'][(r() * 3) | 0];
+        g.beginPath(); g.arc(x, y, 1.3, 0, 6.2832); g.fill();
+      }
+    },
+
+    place(W, H, K, field) {
+      const out = [], cell = 24, s = 5;
+      for (let j = -2; j < H / cell + 4; j++) for (let i = -1; i < W / cell + 1; i++) {
+        const x = (i + .1 + .8 * K.hash(i, j, s + 11)) * cell, y = (j + .1 + .8 * K.hash(i, j, s + 23)) * cell;
+        const sd = field.at(x, y);
+        if (sd > -4) continue;
+        const grove = K.fbm(x / 260, y / 260, s + 71);
+        const roll = K.hash(i, j, s + 37);
+        if (roll > .32 + .7 * grove) continue;                       // riedke miesta = lúčky
+        const t = K.hash(i, j, s + 53), sz = K.hash(i, j, s + 61);
+        const kind = sd > -22 && roll < .2 ? 'bush' : t < .45 ? 'conifer' : t < .85 ? 'round' : 'cypress';
+        const h = kind === 'bush' ? 14 + sz * 8 : 50 + sz * 38;
+        const w = kind === 'conifer' ? h * .62 : kind === 'round' ? h * .7 : kind === 'cypress' ? h * .34 : h * 1.4;
+        out.push({ kind, x, y, h, w, v: K.hash(i, j, s + 67), box: [x - w / 2, y - h, x + w / 2, y + 4] });
+      }
+      return out;
+    },
+
+    shadow(g, o) {
+      const rx = o.w * .62, ry = Math.max(4, o.w * .2), cx = o.x + o.h * .22, cy = o.y + 1;
+      const gr = g.createRadialGradient(cx, cy, 0, cx, cy, rx);
+      gr.addColorStop(0, 'rgba(46,82,40,.30)'); gr.addColorStop(1, 'rgba(46,82,40,0)');
+      g.save(); g.translate(cx, cy); g.scale(1, ry / rx); g.translate(-cx, -cy);
+      g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, rx, 0, 6.2832); g.fill(); g.restore();
+    },
+
+    draw(g, o) {
+      const { x, y, h, w } = o;
+      if (o.kind === 'bush') {
+        const c = rounds[(o.v * rounds.length) | 0];
+        blob(g, x - w * .2, y - h * .45, h * .45, c[1]); blob(g, x + w * .2, y - h * .42, h * .45, c[1]);
+        blob(g, x, y - h * .6, h * .5, c[0]); blob(g, x - w * .12, y - h * .75, h * .26, c[2]);
+        return;
+      }
+      g.fillStyle = '#6b4a33';
+      if (o.kind === 'conifer') {
+        const c = conifers[(o.v * conifers.length) | 0];
+        g.fillRect(x - 2, y - h * .16, 4, h * .16);
+        const tiers = 3 + (o.v * 10 | 0) % 2;
+        for (let i = 0; i < tiers; i++) {
+          const base = y - h * .12 - i * h * (.72 / tiers), top = base - h * .4, half = w * (.5 - i * .08);
+          const apex = i === tiers - 1 ? y - h : top;
+          for (const [side, col] of [[-1, c[0]], [1, c[1]]]) {
+            g.fillStyle = col; g.beginPath(); g.moveTo(x, apex);
+            g.quadraticCurveTo(x + side * half * .45, base - (base - apex) * .4, x + side * half, base);
+            g.quadraticCurveTo(x + side * half * .5, base + 3, x, base + 1.5); g.closePath(); g.fill();
+          }
+        }
+      } else if (o.kind === 'round') {
+        const c = rounds[(o.v * rounds.length) | 0];
+        g.fillRect(x - 2.4, y - h * .4, 4.8, h * .4);
+        g.strokeStyle = '#6b4a33'; g.lineWidth = 1.6;
+        g.beginPath(); g.moveTo(x, y - h * .3); g.lineTo(x - w * .16, y - h * .48); g.stroke();
+        const cy = y - h * .64, r = h * .34;
+        blob(g, x, cy, r, c[1]);
+        blob(g, x - r * .18, cy - r * .16, r * .82, c[0]);
+        g.strokeStyle = c[2]; g.lineWidth = 1.4; g.lineCap = 'round';
+        for (let k = 0; k < 5; k++) {                                 // kresba lístia oblúčikmi
+          const a = 3.4 + k * .5, rr = r * (.35 + .1 * k);
+          g.beginPath(); g.arc(x - r * .1 + Math.cos(a) * rr * .4, cy + Math.sin(a) * rr * .3, r * .22, 3.4, 5.6); g.stroke();
+        }
+      } else {
+        const c = cypress[(o.v * cypress.length) | 0];
+        g.fillRect(x - 1.8, y - h * .12, 3.6, h * .12);
+        g.fillStyle = c[0]; g.beginPath(); g.ellipse(x, y - h * .55, w * .5, h * .46, 0, 0, 6.2832); g.fill();
+        g.fillStyle = c[1]; g.beginPath(); g.ellipse(x - w * .14, y - h * .6, w * .22, h * .36, 0, 0, 6.2832); g.fill();
+      }
+    },
+
+    actors: (() => {
+      const a = KrajinkaActors({ clouds: .09, cloudColor: '30,60,30', birds: true, birdColor: '#3a3a30',
+                                 leaves: .35, leafColors: ['#8cbf5a', '#d9c25a', '#c9a24a'], leafSize: 3.2 });
+      return { layout: (W, H) => a.layout(W, H), frame: (c, dt, t) => a.frame(c, dt, t) };
+    })(),
+  };
+})();
+</script>
+<script src="krajinka-scene.js"></script>
+</body>
+</html>

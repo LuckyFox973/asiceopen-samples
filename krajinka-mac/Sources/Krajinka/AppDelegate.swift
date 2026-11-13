@@ -158,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let themeItem = NSMenuItem(title: "Téma", action: nil, keyEquivalent: "")
         let themeMenu = NSMenu()
         for id in ThemeID.allCases {
+            if id == .plaz { themeMenu.addItem(.separator()) }          // nižšie: vlastné témy cez Metal
             let t = item(id.title, #selector(selectTheme(_:)))
             t.representedObject = id.rawValue
             t.state = id == theme.id ? .on : .off

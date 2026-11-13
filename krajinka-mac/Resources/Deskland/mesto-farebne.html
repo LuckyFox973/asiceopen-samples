@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<title>Krajinka – Farebné mesto</title>
+<style>html, body { margin: 0; height: 100%; overflow: hidden; background: #f1e6d3; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<script src="krajinka-actors.js"></script>
+<script>
+// Farebné mesto v šikmom pohľade: husto stojace domy s fasádami, oknami a strechami,
+// úzke uličky; dokumenty na dláždených námestiach so stromami.
+(function () {
+  const FACADES = ['#e0533f', '#ea7a45', '#f2b54a', '#f5d9a8', '#e9879b', '#d4473f', '#f3e9d6', '#c9412f', '#ef9a5a', '#4aa3a0', '#e8a23f', '#f0c7b0'];
+  const ROOFS = ['#b5482f', '#8f3d2e', '#d9a066', '#e6dccb', '#a8432f', '#c86b3c'];
+  const shade = (hex, k) => { const n = parseInt(hex.slice(1), 16); const f = c => Math.max(0, Math.min(255, Math.round(c * k))); return `rgb(${f(n >> 16)},${f(n >> 8 & 255)},${f(n & 255)})`; };
+  const STREET_X = 210, STREET_Y = 130, ROW = 30;
+
+  window.KRAJINKA_THEME = {
+    seed: 9,
+    region: { radius: [30, 46], wobble: 18, blend: 36 },
+
+    paintGround(g, W, H, K) {
+      g.fillStyle = '#efe3cf'; g.fillRect(0, 0, W, H);
+      const r = K.rng(7);
+      for (let i = 0; i < W * H / 4000; i++) { const x = r() * W, y = r() * H; g.fillStyle = 'rgba(160,130,100,.10)'; g.fillRect(x, y, 1.5, 1.5); }
+    },
+
+    paintRegion(g, W, H, K) {
+      g.fillStyle = '#e7d6b8'; g.fillRect(0, 0, W, H);
+      g.strokeStyle = 'rgba(150,120,90,.28)'; g.lineWidth = .8;          // dlažba – rady oblúčikov
+      for (let y = 4; y < H; y += 6) for (let x = (y / 6 % 2) * 4; x < W; x += 8) {
+        g.beginPath(); g.arc(x, y, 3.6, Math.PI * 1.15, Math.PI * 1.85); g.stroke();
+      }
+    },
+
+    paintRegionEdge(g, W, H, K, field) {
+      const r = K.rng(77);                                              // kvetináče a lavičky pri okraji námestí
+      for (let i = 0; i < W * H / 2500; i++) {
+        const x = r() * W, y = r() * H, sd = field.at(x, y);
+        if (sd < 3 || sd > 9) continue;
+        g.fillStyle = 'rgba(0,0,0,.12)'; g.beginPath(); g.ellipse(x + 2.5, y + 1.5, 4, 2, 0, 0, 6.2832); g.fill();
+        g.fillStyle = '#b5482f'; g.fillRect(x - 3, y - 3, 6, 4);
+        g.fillStyle = ['#5f9a4a', '#e9879b', '#f2b54a'][(r() * 3) | 0];
+        g.beginPath(); g.arc(x, y - 4.5, 3.6, 0, 6.2832); g.fill();
+      }
+    },
+
+    place(W, H, K, field) {
+      const out = [], s = 9;
+      for (let row = -1, y = 0; y < H + 60; row++, y += ROW) {
+        if (Math.floor(y / STREET_Y) !== Math.floor((y - ROW) / STREET_Y)) continue;   // vodorovná ulica
+        let x = -10 + K.hash(row, 0, s) * 20;
+        while (x < W + 40) {
+          const w = 22 + K.hash(row, Math.round(x), s + 1) * 26;
+          const nextStreet = Math.ceil(x / STREET_X) * STREET_X;
+          if (x + w > nextStreet - 7 && x < nextStreet + 7) { x = nextStreet + 8; continue; }   // zvislá ulička
+          const v = K.hash(row, Math.round(x), s + 2);
+          const down = K.fbm(x / 420, y / 420, s + 3);
+          const hf = 16 + v * 22 + 46 * K.sstep(.52, .78, down) * K.hash(row, Math.round(x), s + 4);
+          const rd = 11, x0 = x + 1, x1 = x + w - 1;
+          const pts = [[x0, y], [x1, y], [(x0 + x1) / 2, y - hf - rd], [x0, y - hf], [x1, y - hf]];
+          if (pts.every(([px, py]) => field.at(px, py) < -3)) {
+            out.push({ x: (x0 + x1) / 2, y, x0, x1, hf, rd, v, gable: K.hash(row, Math.round(x), s + 5) < .35,
+                       face: FACADES[(K.hash(row, Math.round(x), s + 6) * FACADES.length) | 0],
+                       roof: ROOFS[(K.hash(row, Math.round(x), s + 7) * ROOFS.length) | 0],
+                       box: [x0, y - hf - rd, x1, y + 2] });
+          }
+          x += w;
+        }
+      }
+      // stromy na námestiach (okolo ikon, nie na nich)
+      for (let j = 0; j < H / 26 + 1; j++) for (let i = 0; i < W / 26 + 1; i++) {
+        const x = (i + .2 + .6 * K.hash(i, j, 31)) * 26, y = (j + .2 + .6 * K.hash(i, j, 32)) * 26;
+        const sd = field.at(x, y);
+        if (sd < 10 || K.hash(i, j, 33) > .22) continue;
+        const h = 26 + K.hash(i, j, 34) * 12;
+        out.push({ tree: true, x, y, h, w: h * .7, box: [x - h * .4, y - h, x + h * .4, y + 3] });
+      }
+      return out;
+    },
+
+    shadow(g, o) {
+      if (o.tree) {
+        g.fillStyle = 'rgba(70,60,40,.22)'; g.beginPath(); g.ellipse(o.x + o.h * .25, o.y + 1, o.w * .55, o.w * .18, 0, 0, 6.2832); g.fill();
+        return;
+      }
+      const sw = o.hf * .42 + 4, top = o.y - o.hf - o.rd;
+      g.fillStyle = 'rgba(80,40,30,.16)'; g.beginPath();
+      g.moveTo(o.x1, top); g.lineTo(o.x1 + sw, top + sw * .45); g.lineTo(o.x1 + sw, o.y + sw * .45); g.lineTo(o.x1, o.y); g.closePath(); g.fill();
+    },
+
+    draw(g, o) {
+      if (o.tree) {
+        const { x, y, h } = o;
+        g.fillStyle = '#6b4a33'; g.fillRect(x - 1.8, y - h * .38, 3.6, h * .38);
+        g.fillStyle = '#4f8a45'; g.beginPath(); g.arc(x, y - h * .66, h * .32, 0, 6.2832); g.fill();
+        g.fillStyle = '#76b35d'; g.beginPath(); g.arc(x - h * .07, y - h * .72, h * .24, 0, 6.2832); g.fill();
+        return;
+      }
+      const { x0, x1, y, hf, rd, face, roof } = o, w = x1 - x0, top = y - hf;
+      // fasáda s jemným prechodom (svetlo zľava)
+      const gr = g.createLinearGradient(x0, 0, x1, 0);
+      gr.addColorStop(0, shade(face, 1.06)); gr.addColorStop(1, shade(face, .9));
+      g.fillStyle = gr; g.fillRect(x0, top, w, hf);
+      // okná
+      const rows = Math.max(1, Math.floor((hf - 9) / 8)), cols = Math.max(1, Math.floor((w - 4) / 7));
+      const cw = (w - 4) / cols;
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        const wx = x0 + 2 + c * cw + cw * .25, wy = top + 4 + r * 8;
+        g.fillStyle = 'rgba(70,30,20,.35)'; g.fillRect(wx + .6, wy + .6, cw * .5, 4.4);
+        g.fillStyle = (o.v * 97 + r * 3 + c) % 7 < 1 ? '#9ec9e0' : '#fff6e6'; g.fillRect(wx, wy, cw * .5, 4.4);
+      }
+      // prízemie: dvere alebo výklad
+      g.fillStyle = shade(face, .55); g.fillRect(x0 + w * .38, y - 6.5, w * .24, 6.5);
+      // strecha
+      if (o.gable) {
+        g.fillStyle = shade(roof, 1.08); g.fillRect(x0 - 1, top - rd, w + 2, rd * .5);
+        g.fillStyle = shade(roof, .85); g.fillRect(x0 - 1, top - rd * .5, w + 2, rd * .5);
+        g.strokeStyle = shade(roof, .65); g.lineWidth = .8; g.beginPath(); g.moveTo(x0 - 1, top - rd * .5); g.lineTo(x1 + 1, top - rd * .5); g.stroke();
+      } else {
+        g.fillStyle = roof; g.fillRect(x0, top - rd, w, rd);
+        g.fillStyle = shade(roof, .82); g.fillRect(x0, top - 1.6, w, 1.6);          // hrana atiky
+        if (w > 26 && o.v > .55) { g.fillStyle = '#d8d2c8'; g.fillRect(x0 + w * .6, top - rd + 2.5, 5, 4); }
+      }
+    },
+
+    actors: (() => {
+      const a = KrajinkaActors({ clouds: .08, cloudColor: '80,40,30', birds: true, birdColor: '#4a3a34', leaves: 0 });
+      return { layout: (W, H) => a.layout(W, H), frame: (c, dt, t) => a.frame(c, dt, t) };
+    })(),
+  };
+})();
+</script>
+<script src="krajinka-scene.js"></script>
+</body>
+</html>
