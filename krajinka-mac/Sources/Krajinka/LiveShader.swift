@@ -189,29 +189,6 @@ static float3 wind(float3 c, float2 p, float t, float grass, float canopy, float
     return c;
 }
 
-static float3 snow(float3 c, float2 p, float t, float field) {
-    const float cells[3] = {46.0, 30.0, 18.0};
-    const float speeds[3] = {34.0, 22.0, 13.0};
-    const float radii[3] = {2.2, 1.5, 0.95};
-    const float alphas[3] = {0.85, 0.7, 0.55};
-    for (int k = 0; k < 3; k++) {
-        float cell = cells[k], v = speeds[k], r = radii[k];
-        uint seed = 951u + uint(k);
-        float ys = p.y + t * v;
-        float sw = sin(t * 0.9 + hashf(floor(p.x / cell), 0.0, seed + 3u) * 6.28) * cell * 0.18;
-        float xs = p.x + sw + t * v * 0.25;
-        float ci = floor(xs / cell), cj = floor(ys / cell);
-        if (hashf(ci, cj, seed + 2u) >= 0.55) continue;
-        float2 fp = float2((ci + 0.15 + 0.7 * hashf(ci, cj, seed)) * cell, (cj + 0.15 + 0.7 * hashf(ci, cj, seed + 1u)) * cell);
-        float flake = (1.0 - sstep(r * 0.35, r, length(float2(xs, ys) - fp))) * alphas[k];
-        c = mix(c, float3(1.0), flake);
-    }
-    if (field > 0.0) {
-        c = mix(c, float3(1.0), twinkle(p, 12.0, 961u, t, 0.5, 16.0, 0.15, 0.9) * field * 0.9);
-    }
-    return c;
-}
-
 // ---------------------------------------------------------------- hlavný fragment
 fragment float4 fmain(VOut in [[stage_in]],
                       constant Uniforms& u [[buffer(0)]],
@@ -248,9 +225,7 @@ fragment float4 fmain(VOut in [[stage_in]],
             c = wind(c, p, t, region, 0.0, 0.0);
             c = cloudShadows(c, p, t, 0.10);
             break;
-        default:  // Zima
-            c = cloudShadows(c, p, t, 0.06);
-            c = snow(c, p, t, region);
+        default:
             break;
     }
     return float4(clamp(c, 0.0, 1.0), 1.0);

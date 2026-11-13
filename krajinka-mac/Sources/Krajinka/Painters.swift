@@ -64,14 +64,7 @@ struct Painters {
             let fg = edge > 0 ? (theme.id == .plaz ? sand(x, y, ch) : island(x, y, ch)) : .black
             c = bg.mix(fg, edge)
         case .les:
-            c = clouds(x, y, ch, over: forest(x, y, ch, snowy: false))
-        case .zima:
-            var bg = RGB.black
-            if edge < 1 {
-                bg = snowGround(x, y, ch)                                      // smreky kreslí Decorator
-                bg = bg.scaled(1 - 0.10 * (1 - sstep(-12, 0, sdf)) * sstep(-24, -12, sdf))   // mäkký tieň okolo pláne
-            }
-            c = bg.mix(edge > 0 ? snowfield(x, y, ch) : .black, edge)
+            c = clouds(x, y, ch, over: forest(x, y, ch))
         case .polia:
             var bg = RGB.black
             if edge < 1 { bg = fields(x, y, ch).scaled(1 - 0.15 * clamp01(1 + sdf / 8)) }
@@ -141,11 +134,9 @@ struct Painters {
         return h > 0 ? c.mix(mark, h * markA * (0.6 + 0.4 * sstep(0.3, 0.7, m))) : c
     }
 
-    private func forest(_ x: Float, _ y: Float, _ ch: [Float], snowy: Bool) -> RGB {
-        let thr: Float = snowy ? 0.22 : 0.5
-        var bg = snowy
-            ? grassfield(x, y, ch, seed: s, RGB(0xE4ECF3), RGB(0xD6E1EC), RGB(0xEEF3F8), mark: RGB(0x9FB4CB), markA: 0.55)
-            : grassfield(x, y, ch, seed: s, RGB(0xBCD47E), RGB(0xA8C86C), RGB(0xCADF91), mark: RGB(0x5E8A3A), markA: 0.5)
+    private func forest(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
+        let thr: Float = 0.5
+        var bg = grassfield(x, y, ch, seed: s, RGB(0xBCD47E), RGB(0xA8C86C), RGB(0xCADF91), mark: RGB(0x5E8A3A), markA: 0.5)
         var g = ch[TerrainField.large] + (ch[TerrainField.detail] - 0.5) * 0.25
         if abs(g - thr) < 0.06 {                                       // kopovitý okraj lesa
             let w = worley(x, y, cell: 26, seed: s &+ 44, jitter: 0.8)
@@ -159,47 +150,13 @@ struct Painters {
         }
         guard tree > 0 else { return bg }
 
-        let (c0, c1, c2, rim) = snowy
-            ? (RGB(0x2E5A55), RGB(0x24494A), RGB(0x3B6B63), RGB(0x1D3B3C))
-            : (RGB(0x4E7F3B), RGB(0x3E6C30), RGB(0x5E9246), RGB(0x2F5A26))
+        let (c0, c1, c2, rim) = (RGB(0x4E7F3B), RGB(0x3E6C30), RGB(0x5E9246), RGB(0x2F5A26))
         var fc = c0.mix(c1, sstep(0.45, 0.7, ch[TerrainField.mot60]))
         fc = fc.mix(c2, sstep(0.6, 0.8, ch[TerrainField.n30]) * 0.7)
         let crowns = worley(x, y, cell: 9, seed: s &+ 92, jitter: 0.9)          // drobná štruktúra korún
         fc = fc.scaled(1 - 0.10 * sstep(0.4, 1, crowns.f1 / 6))
         fc = fc.mix(rim, (1 - sstep(0, 0.03, g - thr)) * 0.5)
-        if snowy {                                                            // ojínené koruny
-            fc = fc.mix(RGB(0xDCE6EE), 0.22 + 0.18 * sstep(0.4, 0.7, ch[TerrainField.n50]))
-            fc = fc.mix(RGB(0xF4F8FB), dots(x, y, s &+ 93, cell: 4.5, p: 0.45, r: 0.95) * 0.75)
-            fc = fc.mix(RGB(0xF4F8FB), dots(x, y, s &+ 94, cell: 7, p: 0.3, r: 1.4) * 0.5)
-        }
         return bg.mix(fc, tree)
-    }
-
-    // MARK: - Zima
-
-    /// Vzdialenosť od osi zamrznutého potoka (menej ako ~0.02 = potok). Potok je len miestami.
-    static func riverDistance(_ field: TerrainField, _ x: Float, _ y: Float) -> Float {
-        guard sstep(0.42, 0.5, field.value(TerrainField.riverGate, x, y)) > 0.5 else { return 1 }
-        let wob = (field.value(TerrainField.n55, x, y) - 0.5) * 0.006
-        return abs(field.value(TerrainField.riverN, x, y) - 0.5 + wob) / 0.6
-    }
-
-    private static let iceStreaks = ValueNoise(seed: 702)
-
-    /// Zasnežená zem s mäkkými škvrnami a zamrznutým potokom.
-    private func snowGround(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
-        var c = RGB(0xEEF3F8).mix(RGB(0xDCE6F0), sstep(0.35, 0.7, ch[TerrainField.mot140]))
-        c = c.mix(.white, dots(x, y, s &+ 601, cell: 5, p: 0.25, r: 0.5) * 0.6)
-        let dist = Self.riverDistance(field, x, y)
-        guard dist < 0.026 else { return c }
-        let ice = 1 - sstep(0.012, 0.016, dist)
-        let bank = (1 - sstep(0.016, 0.026, dist)) * (1 - ice)
-        c = c.mix(RGB(0xC9D7E5), bank * 0.6)                                    // modrastý tieň brehu
-        guard ice > 0 else { return c }
-        let streak = Self.iceStreaks.fbm(x / 90, y / 9, octaves: 3)
-        var ic = RGB(0xA9C7DC).mix(RGB(0xCFE2EE), sstep(0.3, 0.7, streak))
-        ic = ic.mix(RGB(0x8DB0C9), (1 - sstep(0, 0.006, 0.016 - dist)) * 0.6)   // tmavší okraj ľadu
-        return c.mix(ic, ice)
     }
 
     // MARK: - Polia
@@ -322,10 +279,4 @@ struct Painters {
         return c.mix(RGB(0xEDE8DE), 1 - sstep(1, 3, max(ch[TerrainField.sdf], 0)))  // obrubník
     }
 
-    private func snowfield(_ x: Float, _ y: Float, _ ch: [Float]) -> RGB {
-        let inl = max(ch[TerrainField.sdf], 0)
-        var c = RGB(0xFBFDFF).mix(RGB(0xEEF3F9), sstep(0.4, 0.7, ch[TerrainField.mot140]) * (1 - 0.5 * ch[TerrainField.calm]))
-        c = c.mix(.white, dots(x, y, s &+ 501, cell: 5, p: 0.2, r: 0.5) * 0.8)
-        return c.mix(RGB(0xD5E0EC), (1 - sstep(0, 9, inl)) * 0.75)               // modrastý okraj
-    }
 }

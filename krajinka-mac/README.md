@@ -2,11 +2,10 @@
 
 Živá tapeta pre macOS v maľovanom štýle. Prečíta, kde ležia ikony na ploche,
 a pod dokumentmi vytvorí iný povrch než v okolí: piesok uprostred mora,
-oblaky nad lesom, pastvinu medzi poliami, park v meste alebo snehovú pláň
-v ojínenom lese. Blízke dokumenty zdieľajú spoločnú oblasť. Mimo dokumentov
+oblaky nad lesom, pastvinu medzi poliami alebo park v meste. Blízke dokumenty zdieľajú spoločnú oblasť. Mimo dokumentov
 takáto oblasť nikdy nevznikne.
 
-![Šesť tém](docs/temy.jpg)
+![Témy](docs/temy.jpg)
 
 | Téma | Pod dokumentmi | Okolie | Pohyb (Metal shader) |
 |---|---|---|---|
@@ -15,7 +14,6 @@ takáto oblasť nikdy nevznikne.
 | Les a oblaky | kopovité oblaky | les a lúky zhora | vlny vetra v tráve, pohupovanie korún, tiene oblakov |
 | Polia | pastvina s kvetmi | parcely plodín, živé ploty | vietor, tiene oblakov |
 | Mesto | park | ulice, domy a mrakodrapy, stromy | tiene oblakov, vietor v parku |
-| Zima | snehová pláň | les zasnežených smrekov, zamrznutý potok | sneh v troch hĺbkach, trblietky snehu |
 
 Animácie počíta Metal shader (`LiveShader.swift`) na GPU v 30 snímkach za
 sekundu. Keď je plocha zakrytá, pozastaví sa. Shader sa kompiluje pri

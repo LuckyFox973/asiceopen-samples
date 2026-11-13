@@ -56,7 +56,6 @@ final class SceneView: NSView {
         case .les: return 2
         case .polia: return 3
         case .mesto: return 4
-        case .zima: return 5
         }
     }
 
